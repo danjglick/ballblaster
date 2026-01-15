@@ -28,12 +28,13 @@ let ball = {
 }
 let team = []
 let goal = {}
-let walls = []
+let wallPath = []
+let wallPaths = []
 let touch1 = {
 	xPos: 0,
 	yPos: 0
 }
-let isUserFlingingBall = false
+let isFlingingBall = false
 
 function initializeGame() {
 	canvas = document.getElementById("canvas")
@@ -42,6 +43,7 @@ function initializeGame() {
 	ctx = canvas.getContext('2d')
 	document.addEventListener("touchstart", handleTouchstart)
 	document.addEventListener("touchmove", handleTouchmove, { passive: false })
+	document.addEventListener("touchend", handleTouchend)
 	startGame()
 }
 
@@ -49,7 +51,15 @@ function handleTouchstart(e) {
 	touch1.xPos = e.touches[0].clientX
 	touch1.yPos = e.touches[0].clientY
 	if (isObjectCloseToObject(touch1, SHIM, ball)) {
-		isUserFlingingBall = true
+		isFlingingBall = true
+	} else {
+		wallPath = []
+		wallPath.push(
+			{
+				xPos: touch1.xPos, 
+				yPos: touch1.yPos 
+			}
+		)
 	}
 }
 
@@ -59,9 +69,17 @@ function handleTouchmove(e) {
 		xPos: e.touches[0].clientX,
 		yPos: e.touches[0].clientY
 	}
-	if (isUserFlingingBall == true) {
+	if (isFlingingBall == true) {
 		ball.xVel = (touch2.xPos - touch1.xPos) / FLING_DIVISOR
 		ball.yVel = (touch2.yPos - touch1.yPos) / FLING_DIVISOR
+	} else {
+		wallPath.push(touch2)
+	}
+}
+
+function handleTouchend() {
+	if (isFlingingBall == false) {
+		wallPaths.push(wallPath)
 	}
 }
 
@@ -171,6 +189,7 @@ function draw() {
 	drawBall()
 	drawTeam()
 	drawGoal()
+	drawWalls()
 }
 
 function drawBall() {
@@ -193,6 +212,22 @@ function drawTeam() {
 		ctx.fillStyle = BLUE_COLOR
 		ctx.fill()	
 	}
+}
+
+function drawWalls() {
+	ctx.lineWith = 2
+	ctx.strokeStyle = "green"
+	wallPaths.forEach(path => {
+		if (path.length < 2) {
+			return
+		}
+		ctx.beginPath()
+		ctx.moveTo(path[0].xPos, path[0].yPos)
+		path.forEach(point => {
+			ctx.lineTo(point.xPos, point.yPos)
+		})
+		ctx.stroke()
+	})
 }
 
 function isObjectCloseToObject(objectA, distance, objectB) {
