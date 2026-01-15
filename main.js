@@ -4,19 +4,19 @@
 const FPS = 30
 const MS_PER_FRAME = 1000 / FPS
 const SHIM = visualViewport.width / 10
+const BALL_RADIUS = visualViewport.width / 20
+const FRICTION = .99
+const MIN_SPEED = 10
+const FLING_DIVISOR = 2
+const GOAL_WIDTH = visualViewport.width / 10
+const GOAL_HEIGHT = visualViewport.height / 30
+const ATHLETE_RADIUS = visualViewport.width / 20
+const WALL_WIDTH = visualViewport.width / 10
 const GREY_COLOR = "grey"
 const BLUE_COLOR = "blue"
 const RED_COLOR = "red"
 const YELLOW_COLOR = "yellow"
 const WHITE_COLOR = "white"
-const BALL_RADIUS = visualViewport.width / 20
-const FRICTION = .99
-const MIN_SPEED = 10
-const FLING_DIVISOR = 2
-const ATHLETE_RADIUS = visualViewport.width / 20
-const GOAL_WIDTH = visualViewport.width / 10
-const GOAL_HEIGHT = visualViewport.height / 30
-const WALL_WIDTH = visualViewport.width / 10
 
 let canvas;
 let ctx;
@@ -26,8 +26,8 @@ let ball = {
 	xVel: 0,
 	yVel: 0
 }
-let team = []
 let goal = {}
+let team = []
 let wallPath = []
 let wallPaths = []
 let touch1 = {
@@ -85,25 +85,14 @@ function handleTouchend() {
 
 function startGame() {
 	placeBall()
-	placeTeam()
 	placeGoal()
+	placeTeam()
 	loopGame()
 }
 
 function placeBall() {
 	ball.xPos = randomX()
 	ball.yPos = canvas.height - SHIM
-}
-
-function placeTeam() {
-	for (let i=0; i<5; i++) {
-		team.push(
-			{
-				xPos: randomX(),
-				yPos: randomY()
-			}
-		)
-	}
 }
 
 function placeGoal() {
@@ -157,6 +146,17 @@ function placeGoal() {
 	goal.yPos = randomSpot.yPos
 }
 
+function placeTeam() {
+	for (let i=0; i<5; i++) {
+		team.push(
+			{
+				xPos: randomX(),
+				yPos: randomY()
+			}
+		)
+	}
+}
+
 function loopGame() { // MAIN GAME LOOP
 	moveBall()
 	handleCollisions()
@@ -176,12 +176,37 @@ function moveBall() {
 }
 
 function handleCollisions() {
+	handleEdges()
+	handleWalls()
+}
+
+function handleEdges() {
 	if (ball.yPos <=0 || ball.yPos >= canvas.height) {
 		ball.yVel = -ball.yVel
 	}
 	if (ball.xPos <= 0 || ball.xPos >= canvas.width) {
 		ball.xVel = -ball.xVel
 	}
+}
+
+function handleWalls() {
+	wallPaths.forEach(path => {
+		for (let i = 1; i < path.length - 1; i++) {
+			let point = path[i]
+			if (Math.abs(ball.xPos - point.xPos) < SHIM && Math.abs(ball.yPos - point.yPos) < SHIM) {
+				let wallVectorX = path[i++].xPos - path[i--].xPos
+				let wallVectorY = path[i++].yPos - path[i--].yPos
+				let normalVectorX = -wallVectorY
+				let normalVectorY = wallVectorX
+				let length = Math.hypot(normalVectorX, normalVectorY)
+				normalVectorX /= length
+				normalVectorY /= length
+				let dot = ball.xVel * normalVectorX + ball.yVel * normalVectorY
+				ball.xVel = ball.xVel - 2 * dot * normalVectorX
+				ball.yVel = ball.yVel - 2 * dot * normalVectorY
+			}
+		}
+	})
 }
 
 function draw() {
