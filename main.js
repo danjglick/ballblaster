@@ -6,7 +6,6 @@ const MS_PER_FRAME = 1000 / FPS
 const SHIM = visualViewport.width / 10
 const BALL_RADIUS = visualViewport.width / 20
 const FRICTION = .99
-const MIN_SPEED = 20
 const FLING_DIVISOR = 2
 const GOAL_WIDTH = visualViewport.width / 10
 const GOAL_HEIGHT = visualViewport.height / 30
@@ -37,7 +36,7 @@ let touch1 = {
 let isFlingingBall = false
 let score = 0
 let tries = 0
-let perfectScore = 0
+let rewards = []
 let gameLoopTimeout = null
 
 function initializeGame() {
@@ -55,7 +54,7 @@ function initializeGame() {
 function handleTouchstart(e) {
 	touch1.xPos = e.touches[0].clientX
 	touch1.yPos = e.touches[0].clientY
-	if (isObjectCloseToObject(touch1, SHIM, ball)) {
+	if (isObjectCloseToObject(touch1, SHIM * 3, ball)) {
 		isFlingingBall = true
 		tries++
 	} else {
@@ -95,6 +94,7 @@ function startNewGame() {
 		gameLoopTimeout = null
 	}
 	isFlingingBall = false
+	tries = 0
 	placeBall()
 	placeTeam()
 	clearWalls()
@@ -138,10 +138,6 @@ function moveBall() {
 	ball.yPos += ball.yVel
 	ball.xVel *= FRICTION 
 	ball.yVel *= FRICTION
-	if (Math.abs(ball.yVel) < MIN_SPEED && Math.abs(ball.xVel) < MIN_SPEED) {
-		ball.xVel = 0
-		ball.yVel = 0
-	}
 }
 
 function handleCollisions() {
@@ -161,10 +157,17 @@ function handleEdges() {
 
 function handleTeammates() {
 	for (let i = 0; i < team.length; i++) {
-		if (isObjectCloseToObject(ball, SHIM, team[i])) {
+		let teammate = team[i]
+		if (isObjectCloseToObject(ball, SHIM, teammate)) {
+			let rewardPoints = Math.round(100 / Math.max(tries, 1))
+			rewards.push({
+				xPos: teammate.xPos,
+				yPos: teammate.yPos,
+				points: rewardPoints,
+				framesLeft: 110
+			})
 			team.splice(i, 1)
-			score = score + Math.round(100 / tries)
-			perfectScore += 100
+			score = score + rewardPoints
 			if (team.length == 0) {
 				startNewGame()
 			}
@@ -198,6 +201,7 @@ function draw() {
 	drawTeam()
 	drawWalls()
 	drawScore()
+	drawReward()
 }
 
 function drawBall() {
@@ -238,7 +242,19 @@ function drawScore() {
 	ctx.fillStyle = "yellow"
 	ctx.fillText(`${score}`, 10, SHIM)
 	ctx.font = "25px Arial"
-	ctx.fillText(`of ${perfectScore}`, 10, SHIM * 2)
+}
+
+function drawReward() {
+	for (let i = 0; i < rewards.length; i++) {
+		let reward = rewards[i]
+		ctx.font = "15px Arial"
+		ctx.fillStyle = "yellow"
+		ctx.fillText(`+${reward.points}`, reward.xPos, reward.yPos)
+		reward.framesLeft--
+		if (reward.framesLeft == 90) {
+			rewards.splice(i, 1)
+		}
+	}
 }
 
 function isObjectCloseToObject(objectA, distance, objectB) {
