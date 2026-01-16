@@ -54,7 +54,7 @@ function initializeGame() {
 function handleTouchstart(e) {
 	touch1.xPos = e.touches[0].clientX
 	touch1.yPos = e.touches[0].clientY
-	if (isObjectCloseToObject(touch1, SHIM * 3, ball)) {
+	if (isObjectCloseToObject(touch1, SHIM * 2, ball)) {
 		isFlingingBall = true
 		tries++
 	} else {
