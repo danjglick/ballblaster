@@ -61,19 +61,30 @@ function initializeGame() {
 			generateLevel(true)
 		}
 	})
-	document.getElementById("nextButton").addEventListener("click", () => generateLevel())
+	document.getElementById("nextButton").addEventListener("click", () => {
+		// Always increment by 1 from current sprite count
+		let currentCount = team.length > 0 ? team.length : obstacles.length > 0 ? obstacles.length : level
+		// Set level to match the target count so placeTeam() and placeObstacles() work correctly
+		level = currentCount + 1
+		generateLevel(false, false, true) // true = skip level increment since we already set it
+	})
 	document.addEventListener("wheel", (e) => e.preventDefault(), { passive: false })
 	generateLevel()
 }
 
-function generateLevel(isRetry = false, fewerSprites = false) {
+function generateLevel(isRetry = false, fewerSprites = false, skipLevelIncrement = false) {
 	placeBall()
 	// If retry (normal retry or retry going to next level), remove points gained during current level
 	if (isRetry || (fewerSprites && pointsThisLevel > 0)) {
 		totalScore -= pointsThisLevel
 	}
 	if (!isRetry || fewerSprites) {
-		level++
+		if (!fewerSprites && !skipLevelIncrement) {
+			// Only increment level if not using fewer sprites and not skipping increment
+			// When fewerSprites is true, we're staying at the same level but reducing count
+			// When skipLevelIncrement is true (from next button), level was already set correctly
+			level++
+		}
 		if (fewerSprites) {
 			// Go to next level but with one fewer teammate and obstacle
 			// Use current sprite count minus 1, not level-based calculation
@@ -82,6 +93,9 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 			let targetCount = Math.max(1, currentCount - 1)
 			placeTeamWithCount(targetCount)
 			placeObstaclesWithCount(targetCount)
+			// Set level to match the sprite count so tutorial shows correctly
+			// This effectively "goes back a level" in terms of tutorial display
+			level = targetCount
 		} else {
 			placeTeam()
 			placeObstacles()
@@ -546,10 +560,12 @@ function handleCollisionWithTeammate() {
 				let obstacleCount = obstacles.length
 				if (tries === 1) {
 					goodJobMessage = "GOOD JOB"
-				} else if (tries > obstacleCount) {
-					goodJobMessage = "BAD JOB"
-				} else {
+				} else if (tries < obstacleCount - 1) {
+					goodJobMessage = "GOOD JOB"
+				} else if (tries >= obstacleCount - 1 && tries <= obstacleCount + 1) {
 					goodJobMessage = "OK JOB"
+				} else {
+					goodJobMessage = "BAD JOB"
 				}
 				
 				// Show message after tutorial text explodes (3 seconds total: 2s for tutorial + 1s delay)
