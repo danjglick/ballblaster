@@ -23,6 +23,7 @@ let ball = {
 	yVel: 0
 }
 let team = []
+let teamRemaining = []
 let wallPath = []
 let wallPaths = []
 let touch1 = {
@@ -30,9 +31,9 @@ let touch1 = {
 	yPos: 0
 }
 let isFlingingBall = false
-let score = 0
+let totalScore = 0
+let levelScore = 0
 let tries = 0
-let rewards = []
 let gameLoopTimeout = null
 
 function initializeGame() {
@@ -44,7 +45,9 @@ function initializeGame() {
 	document.addEventListener("touchmove", handleTouchmove, { passive: false })
 	document.addEventListener("touchend", handleTouchend)
 	document.addEventListener("wheel", (e) => e.preventDefault(), { passive: false })
-	startNewGame()
+	document.getElementById("retryButton").addEventListener("click", () => generateLevel(team))
+	document.getElementById("nextButton").addEventListener("click", () => generateLevel())
+	generateLevel()
 }
 
 function handleTouchstart(e) {
@@ -82,9 +85,10 @@ function handleTouchend() {
 	if (isFlingingBall == false) {
 		wallPaths.push(wallPath)
 	}
+	isFlingingBall = false
 }
 
-function startNewGame() {
+function generateLevel(preexistingTeam = []) {
 	if (gameLoopTimeout !== null) {
 		clearTimeout(gameLoopTimeout)
 		gameLoopTimeout = null
@@ -92,7 +96,13 @@ function startNewGame() {
 	isFlingingBall = false
 	tries = 0
 	placeBall()
-	placeTeam()
+	if (preexistingTeam.length == 0) {
+		placeTeam()
+		totalScore += levelScore
+	} else {
+	}
+	teamRemaining = JSON.parse(JSON.stringify(team))
+	levelScore = 0
 	clearWalls()
 	loopGame()
 }
@@ -108,7 +118,7 @@ function placeBall() {
 
 function placeTeam() {
 	team = []
-	for (let i=0; i<5; i++) {
+	for (let i = 0; i < 5; i++) {
 		team.push(
 			{
 				xPos: randomX(),
@@ -152,21 +162,12 @@ function handleEdges() {
 }
 
 function handleTeammates() {
-	for (let i = 0; i < team.length; i++) {
-		let teammate = team[i]
+	for (let i = 0; i < teamRemaining.length; i++) {
+		let teammate = teamRemaining[i]
 		if (isObjectCloseToObject(ball, SHIM, teammate)) {
 			let rewardPoints = Math.round(100 / Math.max(tries, 1))
-			rewards.push({
-				xPos: teammate.xPos,
-				yPos: teammate.yPos,
-				points: rewardPoints,
-				framesLeft: FRAMES_PER_REWARD
-			})
-			team.splice(i, 1)
-			score = score + rewardPoints
-			if (team.length == 0) {
-				startNewGame()
-			}
+			teamRemaining.splice(i, 1)
+			levelScore = levelScore + rewardPoints
 		}
 	}
 }
@@ -197,7 +198,6 @@ function draw() {
 	drawTeam()
 	drawWalls()
 	drawScore()
-	drawReward()
 }
 
 function drawBall() {
@@ -208,10 +208,10 @@ function drawBall() {
 }
 
 function drawTeam() {
-	for (let i=0; i<team.length; i++) {
-		let member = team[i]
+	for (let i=0; i<teamRemaining.length; i++) {
+		let teammate = teamRemaining[i]
 		ctx.beginPath()
-		ctx.arc(member.xPos, member.yPos, ATHLETE_RADIUS, 0, 2 * Math.PI)
+		ctx.arc(teammate.xPos, teammate.yPos, ATHLETE_RADIUS, 0, 2 * Math.PI)
 		ctx.fillStyle = "blue"
 		ctx.fill()	
 	}
@@ -234,23 +234,9 @@ function drawWalls() {
 }
 
 function drawScore() {
-	ctx.font = "50px Arial"
-	ctx.fillStyle = "yellow"
-	ctx.fillText(`${score}`, 10, SHIM)
 	ctx.font = "25px Arial"
-}
-
-function drawReward() {
-	for (let i = 0; i < rewards.length; i++) {
-		let reward = rewards[i]
-		ctx.font = "15px Arial"
-		ctx.fillStyle = "yellow"
-		ctx.fillText(`+${reward.points}`, reward.xPos, reward.yPos)
-		reward.framesLeft--
-		if (reward.framesLeft == 0) {
-			rewards.splice(i, 1)
-		}
-	}
+	ctx.fillStyle = "yellow"
+	ctx.fillText(`${totalScore} +${levelScore}`, 10, 20)
 }
 
 function isObjectCloseToObject(objectA, distance, objectB) {
