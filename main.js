@@ -988,7 +988,7 @@ function updateTutorial() {
 	if (level === 1) {
 		textContent = "Fling the grey ball at the blue ball"
 	} else if (level === 2) {
-		textContent = "Blast all the blue balls in as few tries as possible"
+		textContent = "Blast all of the blue balls in as few tries as possible"
 	} else if (level === 3) {
 		textContent = "Switch red and blue balls by tapping them"
 	} else if (level === 4) {
