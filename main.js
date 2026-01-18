@@ -3,16 +3,11 @@
 
 const FPS = 30
 const MS_PER_FRAME = 1000 / FPS
-const SHIM = visualViewport.width / 10
-const BALL_RADIUS = visualViewport.width / 20
+function getShim() { return (canvas?.width || window.innerWidth) / 10 }
+function getBallRadius() { return (canvas?.width || window.innerWidth) / 20 }
+function getTeammateRadius() { return (canvas?.width || window.innerWidth) / 20 }
 const FRICTION = .99
 const FLING_DIVISOR = 2
-const GOAL_WIDTH = visualViewport.width / 10
-const GOAL_HEIGHT = visualViewport.height / 30
-const ATHLETE_RADIUS = visualViewport.width / 20
-const WALL_WIDTH = visualViewport.width / 10
-const CORNER_RADIUS = visualViewport.width / 15
-const FRAMES_PER_REWARD = 10
 
 let canvas;
 let ctx;
@@ -20,123 +15,119 @@ let ball = {
 	xPos: 0,
 	yPos: 0,
 	xVel: 0,
-	yVel: 0
+	yVel: 0,
+	isBeingFlung: false
 }
 let team = []
 let teamRemaining = []
-let wallPath = []
-let wallPaths = []
+let wall = []
+let walls = []
 let touch1 = {
 	xPos: 0,
 	yPos: 0
 }
-let isFlingingBall = false
-let totalScore = 0
-let levelScore = 0
 let tries = 0
+let levelScore = 0
+let totalScore = 0
 let gameLoopTimeout = null
 
 function initializeGame() {
 	canvas = document.getElementById("canvas")
-	canvas.width = visualViewport.width
-	canvas.height = visualViewport.height
+	resizeCanvas()
 	ctx = canvas.getContext('2d')
+	window.addEventListener("resize", resizeCanvas)
+	if (visualViewport) {
+		visualViewport.addEventListener("resize", resizeCanvas)
+	}
 	document.addEventListener("touchstart", handleTouchstart)
 	document.addEventListener("touchmove", handleTouchmove, { passive: false })
 	document.addEventListener("touchend", handleTouchend)
-	document.addEventListener("wheel", (e) => e.preventDefault(), { passive: false })
-	document.getElementById("retryButton").addEventListener("click", () => generateLevel(team))
+	document.getElementById("retryButton").addEventListener("click", () => generateLevel(true))
 	document.getElementById("nextButton").addEventListener("click", () => generateLevel())
+	document.addEventListener("wheel", (e) => e.preventDefault(), { passive: false })
 	generateLevel()
 }
 
+function generateLevel(isRetry = false) {
+	placeBall()
+	if (!isRetry) {
+		totalScore += levelScore
+		placeTeam()
+	}
+	teamRemaining = JSON.parse(JSON.stringify(team))
+	walls = []
+	levelScore = 0
+	tries = 0
+	if (gameLoopTimeout !== null) {
+		clearTimeout(gameLoopTimeout)
+		gameLoopTimeout = null
+	}
+	loopGame()
+}
+
+function loopGame() { // MAIN GAME LOOP
+	moveBall()
+	handleCollision()
+	draw()
+	gameLoopTimeout = setTimeout(loopGame, MS_PER_FRAME)
+}
+
 function handleTouchstart(e) {
-	touch1.xPos = e.touches[0].clientX
-	touch1.yPos = e.touches[0].clientY
-	if (isObjectCloseToObject(touch1, SHIM * 2, ball)) {
-		isFlingingBall = true
+	touch1 = {
+		xPos: e.touches[0].clientX,
+		yPos: e.touches[0].clientY
+	}
+	if (isObjectCloseToObject(touch1, getShim() * 2, ball)) {
+		ball.isBeingFlung = true
 		tries++
 	} else {
-		wallPath = []
-		wallPath.push(
-			{
-				xPos: touch1.xPos, 
-				yPos: touch1.yPos 
-			}
-		)
+		wall = []
+		wall.push({
+			xPos: touch1.xPos, 
+			yPos: touch1.yPos 
+		})
 	}
 }
 
 function handleTouchmove(e) {
 	e.preventDefault()
-	let touch2 = {
-		xPos: e.touches[0].clientX,
-		yPos: e.touches[0].clientY
+	let touch2 = { 
+		xPos: e.touches[0].clientX, 
+		yPos: e.touches[0].clientY 
 	}
-	if (isFlingingBall === true) {
+	if (ball.isBeingFlung) {
 		ball.xVel = (touch2.xPos - touch1.xPos) / FLING_DIVISOR
 		ball.yVel = (touch2.yPos - touch1.yPos) / FLING_DIVISOR
 	} else {
-		wallPath.push(touch2)
+		wall.push(touch2)
 	}
 }
 
 function handleTouchend() {
-	if (isFlingingBall == false) {
-		wallPaths.push(wallPath)
+	if (ball.isBeingFlung === false) {
+		walls.push(wall)
 	}
-	isFlingingBall = false
-}
-
-function generateLevel(preexistingTeam = []) {
-	if (gameLoopTimeout !== null) {
-		clearTimeout(gameLoopTimeout)
-		gameLoopTimeout = null
-	}
-	isFlingingBall = false
-	tries = 0
-	placeBall()
-	if (preexistingTeam.length == 0) {
-		placeTeam()
-		totalScore += levelScore
-	} else {
-	}
-	teamRemaining = JSON.parse(JSON.stringify(team))
-	levelScore = 0
-	clearWalls()
-	loopGame()
+	ball.isBeingFlung = false
 }
 
 function placeBall() {
 	ball = {
-		xPos: randomX(),
-		yPos: canvas.height - SHIM,
+		xPos: getRandomX(),
+		yPos: canvas.height - getShim(),
 		xVel: 0,
-		yVel: 0
+		yVel: 0,
+		isBeingFlung: false
 	}
 }
 
 function placeTeam() {
 	team = []
 	for (let i = 0; i < 5; i++) {
-		team.push(
-			{
-				xPos: randomX(),
-				yPos: randomY()
-			}
-		)
+		team.push({ 
+			xPos: getRandomX(), 
+			yPos: getRandomY() 
+		})
 	}
-}
-
-function clearWalls() {
-	wallPaths = []
-}
-
-function loopGame() { // MAIN GAME LOOP
-	moveBall()
-	handleCollisions()
-	draw()
-	gameLoopTimeout = setTimeout(loopGame, MS_PER_FRAME)
 }
 
 function moveBall() {
@@ -146,25 +137,16 @@ function moveBall() {
 	ball.yVel *= FRICTION
 }
 
-function handleCollisions() {
-	handleTeammates()
-	handleWalls()
-	handleEdges()
+function handleCollision() {
+	handleCollisionWithTeammate()
+	handleCollisionWithWall()
+	handleCollisionWithEdge()
 }
 
-function handleEdges() {
-	if (ball.yPos <=0 || ball.yPos >= canvas.height) {
-    ball.yVel = -ball.yVel
-  }
-  if (ball.xPos <= 0 || ball.xPos >= canvas.width) {
-    ball.xVel = -ball.xVel
-	}
-}
-
-function handleTeammates() {
+function handleCollisionWithTeammate() {
 	for (let i = 0; i < teamRemaining.length; i++) {
 		let teammate = teamRemaining[i]
-		if (isObjectCloseToObject(ball, SHIM, teammate)) {
+		if (isObjectCloseToObject(ball, getShim(), teammate)) {
 			let rewardPoints = Math.round(100 / Math.max(tries, 1))
 			teamRemaining.splice(i, 1)
 			levelScore = levelScore + rewardPoints
@@ -172,11 +154,11 @@ function handleTeammates() {
 	}
 }
 
-function handleWalls() {
-	wallPaths.forEach(path => {
+function handleCollisionWithWall() {
+	walls.forEach(path => {
 		for (let i = 1; i < path.length - 1; i++) {
 			let point = path[i]
-			if (isObjectCloseToObject(ball, SHIM, point)) {
+			if (isObjectCloseToObject(ball, getShim(), point)) {
 				let wallVectorX = path[i++].xPos - path[i--].xPos
 				let wallVectorY = path[i++].yPos - path[i--].yPos
 				let normalVectorX = -wallVectorY
@@ -192,6 +174,15 @@ function handleWalls() {
 	})
 }
 
+function handleCollisionWithEdge() {
+	if (ball.yPos <=0 || ball.yPos >= canvas.height) {
+    ball.yVel = -ball.yVel
+  }
+  if (ball.xPos <= 0 || ball.xPos >= canvas.width) {
+    ball.xVel = -ball.xVel
+	}
+}
+
 function draw() {
 	ctx.clearRect(0, 0, canvas.width, canvas.height)
 	drawBall()
@@ -202,7 +193,7 @@ function draw() {
 
 function drawBall() {
 	ctx.beginPath()
-	ctx.arc(ball.xPos, ball.yPos, BALL_RADIUS, 0, 2 * Math.PI)
+	ctx.arc(ball.xPos, ball.yPos, getBallRadius(), 0, 2 * Math.PI)
 	ctx.fillStyle = "grey"
 	ctx.fill()
 }
@@ -211,7 +202,7 @@ function drawTeam() {
 	for (let i=0; i<teamRemaining.length; i++) {
 		let teammate = teamRemaining[i]
 		ctx.beginPath()
-		ctx.arc(teammate.xPos, teammate.yPos, ATHLETE_RADIUS, 0, 2 * Math.PI)
+		ctx.arc(teammate.xPos, teammate.yPos, getTeammateRadius(), 0, 2 * Math.PI)
 		ctx.fillStyle = "blue"
 		ctx.fill()	
 	}
@@ -220,23 +211,33 @@ function drawTeam() {
 function drawWalls() {
 	ctx.lineWidth = 20
 	ctx.strokeStyle = "purple"
-	wallPaths.forEach(path => {
-		if (path.length < 2) {
+	walls.forEach(wallPath => {
+		if (wallPath.length < 2) {
 			return
 		}
 		ctx.beginPath()
-		ctx.moveTo(path[0].xPos, path[0].yPos)
-		path.forEach(point => {
-			ctx.lineTo(point.xPos, point.yPos)
+		ctx.moveTo(wallPath[0].xPos, wallPath[0].yPos)
+		wallPath.forEach(wallPoint => {
+			ctx.lineTo(wallPoint.xPos, wallPoint.yPos)
 		})
 		ctx.stroke()
 	})
+	// Draw the current wall being drawn
+	if (wall.length >= 2 && !ball.isBeingFlung) {
+		ctx.beginPath()
+		ctx.moveTo(wall[0].xPos, wall[0].yPos)
+		wall.forEach(wallPoint => {
+			ctx.lineTo(wallPoint.xPos, wallPoint.yPos)
+		})
+		ctx.stroke()
+	}
 }
 
 function drawScore() {
-	ctx.font = "25px Arial"
+	ctx.font = "20px Arial"
 	ctx.fillStyle = "yellow"
-	ctx.fillText(`${totalScore} +${levelScore}`, 10, 20)
+	let scoreText = levelScore > 0 ? `Score: ${totalScore} +${levelScore}` : `Score: ${totalScore}`
+	ctx.fillText(scoreText, 10, 20)
 }
 
 function isObjectCloseToObject(objectA, distance, objectB) {
@@ -246,10 +247,17 @@ function isObjectCloseToObject(objectA, distance, objectB) {
   )
 }
 
-function randomX() {
-	return visualViewport.width * Math.random()
+function getRandomX() {
+	return (canvas?.width || window.innerWidth) * Math.random()
 }
 
-function randomY() {
-	return visualViewport.height * Math.random()
+function getRandomY() {
+	return (canvas?.height || window.innerHeight) * Math.random()
+}
+
+function resizeCanvas() {
+	if (canvas) {
+		canvas.width = window.innerWidth
+		canvas.height = window.innerHeight
+	}
 }

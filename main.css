@@ -5,7 +5,7 @@ body {
 #canvasContainer {
   position: relative;
   width: 100vw;
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden; 
 }
 
@@ -20,11 +20,11 @@ body {
 #retryButton {
   position: absolute;
   top: 0%;
-  left: 75%;
+  left: 53.5%;
 }
 
 #nextButton {
   position: absolute;
   top: 0%;
-  left: 90%;
+  left: 77.5%;
 }
