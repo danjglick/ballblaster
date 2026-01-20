@@ -12,6 +12,7 @@ const BALL_STOP_SPEED = 10 // Higher threshold so we treat the ball as "stopped"
 const TOUCH_TOLERANCE = 20 // Extra pixels for touch detection
 const SPAWN_ANIMATION_DURATION = 700 // ms for ball spawn animation
 const FADE_DURATION = 1000 // ms for fade animations
+const FADE_IN_DELAY = 1000 // ms delay before starting fade-in (prevents flashing)
 const TROPHY_PLACEMENT_DELAY = 2000 // ms delay before placing trophy
 const TUTORIAL_FADE_DELAY = 2000 // ms delay before fading tutorial
 const OBSTACLE_FADE_DELAY = 1000 // ms delay before fading obstacles
@@ -293,12 +294,32 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 		gameLoopTimeout = null
 	}
 	// Draw immediately so UI (level indicator) doesn't "flash" during the 100ms restart delay
-	// Ensure all obstacles start at opacity 0 before drawing
+	// CRITICAL: Ensure all sprites start at opacity 0 and have fade-in initialized before first draw
+	// Add delay before fade-in starts to prevent flashing
+	let fadeInStartTime = Date.now() + FADE_IN_DELAY
 	for (let i = 0; i < obstacles.length; i++) {
-		if (obstacles[i].fadeInOpacity === undefined) {
-			obstacles[i].fadeInOpacity = 0
-			obstacles[i].fadeInStartTime = Date.now()
-		}
+		obstacles[i].fadeInOpacity = 0
+		obstacles[i].fadeInStartTime = fadeInStartTime
+	}
+	// Ensure all targets have fade-in initialized
+	for (let i = 0; i < targetsRemaining.length; i++) {
+		targetsRemaining[i].fadeInOpacity = 0
+		targetsRemaining[i].fadeInStartTime = fadeInStartTime
+	}
+	// Ensure star has fade-in initialized
+	if (star) {
+		star.fadeInOpacity = 0
+		star.fadeInStartTime = fadeInStartTime
+	}
+	// Ensure switcher has fade-in initialized
+	if (switcher) {
+		switcher.fadeInOpacity = 0
+		switcher.fadeInStartTime = fadeInStartTime
+	}
+	// Ensure skull has fade-in initialized
+	if (skull) {
+		skull.fadeInOpacity = 0
+		skull.fadeInStartTime = fadeInStartTime
 	}
 	draw()
 	// Small delay to prevent zoom issues during level reload, then resume
@@ -333,7 +354,9 @@ function convertTargetAndObstacle(targetIndex, obstacleIndex) {
 	// Convert obstacle to target (at obstacle's position)
 	targetsRemaining.push({
 		xPos: obstacleX,
-		yPos: obstacleY
+		yPos: obstacleY,
+		fadeInOpacity: 1.0, // Instantly visible
+		fadeInStartTime: Date.now() // Already started
 	})
 	
 	// Convert target to obstacle (at target's position)
@@ -341,8 +364,8 @@ function convertTargetAndObstacle(targetIndex, obstacleIndex) {
 		xPos: targetX,
 		yPos: targetY,
 		radius: targetRadius,
-		fadeInOpacity: 0, // Start invisible for fade-in
-		fadeInStartTime: Date.now()
+		fadeInOpacity: 1.0, // Instantly visible
+		fadeInStartTime: Date.now() // Already started
 	})
 	
 	selectedForConversion = null
@@ -358,10 +381,24 @@ function swapStarAndTarget(targetIndex) {
 	let targetX = target.xPos
 	let targetY = target.yPos
 	
-	// Find corresponding target in targets array and update both
-	let targetInTargets = targets.find(t => 
-		Math.abs(t.xPos - targetX) < 0.5 && Math.abs(t.yPos - targetY) < 0.5
-	)
+	// Find corresponding target in targets array - try to match by finding the target
+	// that was at this position before any swaps occurred
+	// Since targetsRemaining is created from targets, we can find by matching all targets
+	// that haven't been collected yet
+	let targetInTargets = null
+	// First, try to find by exact position match
+	for (let i = 0; i < targets.length; i++) {
+		let t = targets[i]
+		// Check if this target is still in targetsRemaining (not collected)
+		let stillRemaining = targetsRemaining.some(tr => 
+			Math.abs(tr.xPos - t.xPos) < 0.5 && Math.abs(tr.yPos - t.yPos) < 0.5
+		)
+		// If this target matches the one we're swapping with and is still remaining
+		if (stillRemaining && Math.abs(t.xPos - targetX) < 0.5 && Math.abs(t.yPos - targetY) < 0.5) {
+			targetInTargets = t
+			break
+		}
+	}
 	
 	// Swap positions
 	star.xPos = targetX
@@ -372,6 +409,12 @@ function swapStarAndTarget(targetIndex) {
 		targetInTargets.xPos = starX
 		targetInTargets.yPos = starY
 	}
+	
+	// Ensure items are instantly visible
+	star.fadeInOpacity = 1.0
+	star.fadeInStartTime = Date.now()
+	target.fadeInOpacity = 1.0
+	target.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
@@ -389,7 +432,13 @@ function swapStarAndObstacle(obstacleIndex) {
 	star.xPos = obstacleX
 	star.yPos = obstacleY
 	obstacle.xPos = starX
-	obstacle.yPos = obstacleY
+	obstacle.yPos = starY
+	
+	// Ensure items are instantly visible
+	star.fadeInOpacity = 1.0
+	star.fadeInStartTime = Date.now()
+	obstacle.fadeInOpacity = 1.0
+	obstacle.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
@@ -403,10 +452,22 @@ function swapSkullAndTarget(targetIndex) {
 	let targetX = target.xPos
 	let targetY = target.yPos
 	
-	// Find corresponding target in targets array and update both
-	let targetInTargets = targets.find(t => 
-		Math.abs(t.xPos - targetX) < 0.5 && Math.abs(t.yPos - targetY) < 0.5
-	)
+	// Find corresponding target in targets array - try to match by finding the target
+	// that was at this position before any swaps occurred
+	let targetInTargets = null
+	// First, try to find by exact position match among remaining targets
+	for (let i = 0; i < targets.length; i++) {
+		let t = targets[i]
+		// Check if this target is still in targetsRemaining (not collected)
+		let stillRemaining = targetsRemaining.some(tr => 
+			Math.abs(tr.xPos - t.xPos) < 0.5 && Math.abs(tr.yPos - t.yPos) < 0.5
+		)
+		// If this target matches the one we're swapping with and is still remaining
+		if (stillRemaining && Math.abs(t.xPos - targetX) < 0.5 && Math.abs(t.yPos - targetY) < 0.5) {
+			targetInTargets = t
+			break
+		}
+	}
 	
 	// Swap positions
 	skull.xPos = targetX
@@ -417,6 +478,12 @@ function swapSkullAndTarget(targetIndex) {
 		targetInTargets.xPos = skullX
 		targetInTargets.yPos = skullY
 	}
+	
+	// Ensure items are instantly visible
+	skull.fadeInOpacity = 1.0
+	skull.fadeInStartTime = Date.now()
+	target.fadeInOpacity = 1.0
+	target.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
@@ -434,7 +501,13 @@ function swapSkullAndObstacle(obstacleIndex) {
 	skull.xPos = obstacleX
 	skull.yPos = obstacleY
 	obstacle.xPos = skullX
-	obstacle.yPos = obstacleY
+	obstacle.yPos = skullY
+	
+	// Ensure items are instantly visible
+	skull.fadeInOpacity = 1.0
+	skull.fadeInStartTime = Date.now()
+	obstacle.fadeInOpacity = 1.0
+	obstacle.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
@@ -453,6 +526,12 @@ function swapStarAndSkull() {
 	skull.xPos = starX
 	skull.yPos = starY
 	
+	// Ensure items are instantly visible
+	star.fadeInOpacity = 1.0
+	star.fadeInStartTime = Date.now()
+	skull.fadeInOpacity = 1.0
+	skull.fadeInStartTime = Date.now()
+	
 	selectedForConversion = null
 }
 
@@ -469,6 +548,12 @@ function swapStarAndSwitcher() {
 	star.yPos = switcherY
 	switcher.xPos = starX
 	switcher.yPos = starY
+	
+	// Ensure items are instantly visible
+	star.fadeInOpacity = 1.0
+	star.fadeInStartTime = Date.now()
+	switcher.fadeInOpacity = 1.0
+	switcher.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
@@ -487,6 +572,81 @@ function swapSkullAndSwitcher() {
 	switcher.xPos = skullX
 	switcher.yPos = skullY
 	
+	// Ensure items are instantly visible
+	skull.fadeInOpacity = 1.0
+	skull.fadeInStartTime = Date.now()
+	switcher.fadeInOpacity = 1.0
+	switcher.fadeInStartTime = Date.now()
+	
+	selectedForConversion = null
+}
+
+function swapSwitcherAndTarget(targetIndex) {
+	if (!switcher) return
+	
+	let switcherX = switcher.xPos
+	let switcherY = switcher.yPos
+	let target = targetsRemaining[targetIndex]
+	let targetX = target.xPos
+	let targetY = target.yPos
+	
+	// Find corresponding target in targets array - try to match by finding the target
+	// that was at this position before any swaps occurred
+	let targetInTargets = null
+	// First, try to find by exact position match among remaining targets
+	for (let i = 0; i < targets.length; i++) {
+		let t = targets[i]
+		// Check if this target is still in targetsRemaining (not collected)
+		let stillRemaining = targetsRemaining.some(tr => 
+			Math.abs(tr.xPos - t.xPos) < 0.5 && Math.abs(tr.yPos - t.yPos) < 0.5
+		)
+		// If this target matches the one we're swapping with and is still remaining
+		if (stillRemaining && Math.abs(t.xPos - targetX) < 0.5 && Math.abs(t.yPos - targetY) < 0.5) {
+			targetInTargets = t
+			break
+		}
+	}
+	
+	// Swap positions
+	switcher.xPos = targetX
+	switcher.yPos = targetY
+	target.xPos = switcherX
+	target.yPos = switcherY
+	if (targetInTargets) {
+		targetInTargets.xPos = switcherX
+		targetInTargets.yPos = switcherY
+	}
+	
+	// Ensure items are instantly visible
+	switcher.fadeInOpacity = 1.0
+	switcher.fadeInStartTime = Date.now()
+	target.fadeInOpacity = 1.0
+	target.fadeInStartTime = Date.now()
+	
+	selectedForConversion = null
+}
+
+function swapSwitcherAndObstacle(obstacleIndex) {
+	if (!switcher) return
+	
+	let switcherX = switcher.xPos
+	let switcherY = switcher.yPos
+	let obstacle = obstacles[obstacleIndex]
+	let obstacleX = obstacle.xPos
+	let obstacleY = obstacle.yPos
+	
+	// Swap positions
+	switcher.xPos = obstacleX
+	switcher.yPos = obstacleY
+	obstacle.xPos = switcherX
+	obstacle.yPos = switcherY
+	
+	// Ensure items are instantly visible
+	switcher.fadeInOpacity = 1.0
+	switcher.fadeInStartTime = Date.now()
+	obstacle.fadeInOpacity = 1.0
+	obstacle.fadeInStartTime = Date.now()
+	
 	selectedForConversion = null
 }
 
@@ -497,10 +657,22 @@ function swapBallAndTarget(targetIndex) {
 	let targetX = target.xPos
 	let targetY = target.yPos
 	
-	// Find corresponding target in targets array and update both
-	let targetInTargets = targets.find(t => 
-		Math.abs(t.xPos - targetX) < 0.5 && Math.abs(t.yPos - targetY) < 0.5
-	)
+	// Find corresponding target in targets array - try to match by finding the target
+	// that was at this position before any swaps occurred
+	let targetInTargets = null
+	// First, try to find by exact position match among remaining targets
+	for (let i = 0; i < targets.length; i++) {
+		let t = targets[i]
+		// Check if this target is still in targetsRemaining (not collected)
+		let stillRemaining = targetsRemaining.some(tr => 
+			Math.abs(tr.xPos - t.xPos) < 0.5 && Math.abs(tr.yPos - t.yPos) < 0.5
+		)
+		// If this target matches the one we're swapping with and is still remaining
+		if (stillRemaining && Math.abs(t.xPos - targetX) < 0.5 && Math.abs(t.yPos - targetY) < 0.5) {
+			targetInTargets = t
+			break
+		}
+	}
 	
 	// Swap positions
 	ball.xPos = targetX
@@ -511,6 +683,10 @@ function swapBallAndTarget(targetIndex) {
 		targetInTargets.xPos = ballX
 		targetInTargets.yPos = ballY
 	}
+	
+	// Ensure target is instantly visible
+	target.fadeInOpacity = 1.0
+	target.fadeInStartTime = Date.now()
 	
 	// Reset ball velocity when swapping
 	ball.xVel = 0
@@ -532,6 +708,10 @@ function swapBallAndObstacle(obstacleIndex) {
 	ball.yPos = obstacleY
 	obstacle.xPos = ballX
 	obstacle.yPos = ballY
+	
+	// Ensure obstacle is instantly visible
+	obstacle.fadeInOpacity = 1.0
+	obstacle.fadeInStartTime = Date.now()
 	
 	// Reset ball velocity when swapping
 	ball.xVel = 0
@@ -555,6 +735,10 @@ function swapBallAndStar() {
 	star.xPos = ballX
 	star.yPos = ballY
 	
+	// Ensure star is instantly visible
+	star.fadeInOpacity = 1.0
+	star.fadeInStartTime = Date.now()
+	
 	// Reset ball velocity when swapping
 	ball.xVel = 0
 	ball.yVel = 0
@@ -577,6 +761,10 @@ function swapBallAndSwitcher() {
 	switcher.xPos = ballX
 	switcher.yPos = ballY
 	
+	// Ensure switcher is instantly visible
+	switcher.fadeInOpacity = 1.0
+	switcher.fadeInStartTime = Date.now()
+	
 	// Reset ball velocity when swapping
 	ball.xVel = 0
 	ball.yVel = 0
@@ -598,6 +786,10 @@ function swapBallAndSkull() {
 	ball.yPos = skullY
 	skull.xPos = ballX
 	skull.yPos = ballY
+	
+	// Ensure skull is instantly visible
+	skull.fadeInOpacity = 1.0
+	skull.fadeInStartTime = Date.now()
 	
 	// Reset ball velocity when swapping
 	ball.xVel = 0
@@ -724,13 +916,11 @@ function handleTouchstart(e) {
 		if (switcherDistance < switcher.radius + TOUCH_TOLERANCE) {
 			if (selectedForConversion && selectedForConversion.type === 'target') {
 				// Second tap: we have a target selected, now tapping switcher - swap positions
-				// Note: switcher doesn't swap with targets/obstacles, only with other items
-				selectedForConversion = { type: 'switcher', index: 0 }
+				swapSwitcherAndTarget(selectedForConversion.index)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'obstacle') {
 				// Second tap: we have an obstacle selected, now tapping switcher - swap positions
-				// Note: switcher doesn't swap with targets/obstacles, only with other items
-				selectedForConversion = { type: 'switcher', index: 0 }
+				swapSwitcherAndObstacle(selectedForConversion.index)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'star') {
 				// Second tap: we have a star selected, now tapping switcher - swap positions
@@ -770,8 +960,8 @@ function handleTouchstart(e) {
 				swapSkullAndObstacle(i)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'switcher') {
-				// Second tap: we have a switcher selected, now tapping obstacle - no swap (switcher only swaps with items)
-				selectedForConversion = { type: 'obstacle', index: i }
+				// Second tap: we have a switcher selected, now tapping obstacle - swap positions
+				swapSwitcherAndObstacle(i)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
 				// Second tap: we have a ball selected, now tapping obstacle - swap positions
@@ -809,8 +999,8 @@ function handleTouchstart(e) {
 				swapSkullAndTarget(i)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'switcher') {
-				// Second tap: we have a switcher selected, now tapping target - no swap (switcher only swaps with items)
-				selectedForConversion = { type: 'target', index: i }
+				// Second tap: we have a switcher selected, now tapping target - swap positions
+				swapSwitcherAndTarget(i)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
 				// Second tap: we have a ball selected, now tapping target - swap positions
@@ -1032,7 +1222,7 @@ function placeTargetsWithCount(targetCount) {
 			xPos: xPos, 
 			yPos: yPos,
 			fadeInOpacity: 0, // Start invisible for fade-in
-			fadeInStartTime: Date.now()
+			fadeInStartTime: Date.now() + FADE_IN_DELAY // Delay before fade-in starts
 		})
 	}
 }
@@ -1118,7 +1308,7 @@ function placeObstaclesWithCount(obstacleCount) {
 			yPos: yPos,
 			radius: obstacleRadius,
 			fadeInOpacity: 0, // Start invisible for fade-in
-			fadeInStartTime: Date.now(),
+			fadeInStartTime: Date.now() + FADE_IN_DELAY, // Delay before fade-in starts
 			_fadeInInitialized: true // Flag to ensure fade-in is properly initialized
 		})
 	}
@@ -1346,7 +1536,9 @@ function placeStar() {
 	star = {
 		xPos: xPos,
 		yPos: yPos,
-		radius: starRadius
+		radius: starRadius,
+		fadeInOpacity: 0, // Start invisible for fade-in
+		fadeInStartTime: Date.now() + FADE_IN_DELAY // Delay before fade-in starts
 	}
 }
 
@@ -1449,7 +1641,9 @@ function placeSwitcher() {
 	switcher = {
 		xPos: xPos,
 		yPos: yPos,
-		radius: switcherRadius
+		radius: switcherRadius,
+		fadeInOpacity: 0, // Start invisible for fade-in
+		fadeInStartTime: Date.now() + FADE_IN_DELAY // Delay before fade-in starts
 	}
 }
 
@@ -1552,7 +1746,9 @@ function placeSkull() {
 	skull = {
 		xPos: xPos,
 		yPos: yPos,
-		radius: skullRadius
+		radius: skullRadius,
+		fadeInOpacity: 0, // Start invisible for fade-in
+		fadeInStartTime: Date.now() + FADE_IN_DELAY // Delay before fade-in starts
 	}
 }
 
@@ -1638,48 +1834,37 @@ function moveBall() {
 			ball.yVel = 0
 			ball.isBeingFlung = false
 
-			// Rebuild targetsRemaining from the original targets, fading back in any
-			// targets that were already collected during this shot.
-			if (targets && targets.length > 0) {
+			// CRITICAL: Restore everything to exactly match the initial level state
+			// Restore targets array first
+			if (savedTargets && savedTargets.length > 0) {
+				targets = JSON.parse(JSON.stringify(savedTargets))
+			}
+			
+			// Restore targetsRemaining from savedTargets - all targets should be visible with fade-in
+			if (savedTargets && savedTargets.length > 0) {
 				let newTargetsRemaining = []
-				for (let i = 0; i < targets.length; i++) {
-					let fullTarget = targets[i]
-					// Check if this target is still in targetsRemaining (by position)
-					let exists = targetsRemaining.some(t =>
-						Math.abs(t.xPos - fullTarget.xPos) < 0.5 &&
-						Math.abs(t.yPos - fullTarget.yPos) < 0.5
-					)
-					if (exists) {
-						// Keep as-is (already visible)
-						newTargetsRemaining.push({
-							xPos: fullTarget.xPos,
-							yPos: fullTarget.yPos
-						})
-					} else {
-						// Bring back with fade-in synced to the ball reset
-						newTargetsRemaining.push({
-							xPos: fullTarget.xPos,
-							yPos: fullTarget.yPos,
-							fadeInOpacity: 0,
-							fadeInStartTime: autoResetStartTime
-						})
-					}
+				for (let i = 0; i < savedTargets.length; i++) {
+					newTargetsRemaining.push({
+						xPos: savedTargets[i].xPos,
+						yPos: savedTargets[i].yPos,
+						fadeInOpacity: 0,
+						fadeInStartTime: autoResetStartTime
+					})
 				}
 				targetsRemaining = newTargetsRemaining
 			}
 			
-			// Restore obstacles from savedObstacles (in case they were doubled by skull)
-			// This ensures doubled obstacles only last for the duration of that try
+			// Restore obstacles from savedObstacles - exactly as they were at level start
 			if (savedObstacles && savedObstacles.length > 0) {
 				obstacles = JSON.parse(JSON.stringify(savedObstacles))
-				// Add fade-in to restored obstacles
+				// Add fade-in to all restored obstacles
 				for (let i = 0; i < obstacles.length; i++) {
 					obstacles[i].fadeInOpacity = 0
 					obstacles[i].fadeInStartTime = autoResetStartTime
 				}
 			}
 			
-			// Restore sprites (star, switcher, skull) with fade-in
+			// Restore sprites (star, switcher, skull) exactly as they were at level start
 			if (savedStar) {
 				star = JSON.parse(JSON.stringify(savedStar))
 				star.fadeInOpacity = 0
@@ -1698,6 +1883,8 @@ function moveBall() {
 				skull = JSON.parse(JSON.stringify(savedSkull))
 				skull.fadeInOpacity = 0
 				skull.fadeInStartTime = autoResetStartTime
+				// Reset skull hit flag so it can be hit again
+				skullHitThisTry = false
 			} else {
 				skull = null
 			}
@@ -1923,14 +2110,7 @@ function handleCollisionWithStar() {
 		
 		// Remove the star
 		star = null
-		
-		// Update saved obstacles so auto-reset works correctly
-		let obstaclesToSave = JSON.parse(JSON.stringify(obstacles))
-		for (let i = 0; i < obstaclesToSave.length; i++) {
-			delete obstaclesToSave[i].fadeInOpacity
-			delete obstaclesToSave[i].fadeInStartTime
-		}
-		savedObstacles = obstaclesToSave
+		// Don't update savedObstacles - auto-reset should restore to original level state
 	}
 }
 
@@ -1957,6 +2137,12 @@ function handleCollisionWithSwitcher() {
 			targets[i].yPos = obstaclePositions[i].yPos
 			obstacles[i].xPos = targetPositions[i].xPos
 			obstacles[i].yPos = targetPositions[i].yPos
+			
+			// Ensure all swapped items are instantly visible
+			targets[i].fadeInOpacity = 1.0
+			targets[i].fadeInStartTime = Date.now()
+			obstacles[i].fadeInOpacity = 1.0
+			obstacles[i].fadeInStartTime = Date.now()
 		}
 		
 		// If there are more targets than obstacles, remaining targets keep their positions
@@ -1965,14 +2151,13 @@ function handleCollisionWithSwitcher() {
 		// Update targetsRemaining to match targets
 		targetsRemaining = JSON.parse(JSON.stringify(targets))
 		
-		// Update saved targets and obstacles so auto-reset works correctly
-		savedTargets = JSON.parse(JSON.stringify(targets))
-		let obstaclesToSave = JSON.parse(JSON.stringify(obstacles))
-		for (let i = 0; i < obstaclesToSave.length; i++) {
-			delete obstaclesToSave[i].fadeInOpacity
-			delete obstaclesToSave[i].fadeInStartTime
+		// Ensure all targetsRemaining are instantly visible
+		for (let i = 0; i < targetsRemaining.length; i++) {
+			targetsRemaining[i].fadeInOpacity = 1.0
+			targetsRemaining[i].fadeInStartTime = Date.now()
 		}
-		savedObstacles = obstaclesToSave
+		
+		// Don't update savedTargets or savedObstacles - auto-reset should restore to original level state
 		
 		// Remove the switcher
 		switcher = null
@@ -2100,18 +2285,12 @@ function handleCollisionWithSkull() {
 				xPos: xPos,
 				yPos: yPos,
 				radius: obstacleRadius,
-				fadeInOpacity: 0,
-				fadeInStartTime: Date.now()
+				fadeInOpacity: 1.0, // Instantly visible
+				fadeInStartTime: Date.now() // Already started
 			})
 		}
 		
-		// Update saved obstacles so auto-reset works correctly
-		let obstaclesToSave = JSON.parse(JSON.stringify(obstacles))
-		for (let i = 0; i < obstaclesToSave.length; i++) {
-			delete obstaclesToSave[i].fadeInOpacity
-			delete obstaclesToSave[i].fadeInStartTime
-		}
-		savedObstacles = obstaclesToSave
+		// Don't update savedObstacles - auto-reset should restore to original level state
 		
 		// Remove the skull
 		skull = null
@@ -2173,7 +2352,13 @@ function draw() {
 	// Update fade-in for targets
 	for (let i = 0; i < targetsRemaining.length; i++) {
 		let target = targetsRemaining[i]
-		if (target.fadeInOpacity !== undefined && target.fadeInOpacity < 1.0) {
+		// Initialize fade-in if missing
+		if (target.fadeInOpacity === undefined || target.fadeInStartTime === undefined) {
+			target.fadeInOpacity = 0
+			target.fadeInStartTime = Date.now() + FADE_IN_DELAY
+		}
+		// Update fade-in only if start time has passed
+		if (target.fadeInOpacity < 1.0 && target.fadeInStartTime <= Date.now()) {
 			let elapsed = Date.now() - target.fadeInStartTime
 			let fadeDuration = FADE_DURATION
 			target.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
@@ -2187,12 +2372,12 @@ function draw() {
 		// CRITICAL: Always initialize fade-in if missing - this prevents flashing
 		if (obstacle.fadeInOpacity === undefined || obstacle.fadeInStartTime === undefined) {
 			obstacle.fadeInOpacity = 0
-			obstacle.fadeInStartTime = Date.now()
+			obstacle.fadeInStartTime = Date.now() + FADE_IN_DELAY
 		}
 		
-		// Handle fade-in - always update if fadeInOpacity is less than 1.0
-		// This ensures obstacles gradually fade in from 0 to 1.0
-		if (obstacle.fadeInOpacity < 1.0) {
+		// Handle fade-in - only update if start time has passed
+		// This ensures obstacles gradually fade in from 0 to 1.0 after the delay
+		if (obstacle.fadeInOpacity < 1.0 && obstacle.fadeInStartTime <= Date.now()) {
 			let elapsed = Date.now() - obstacle.fadeInStartTime
 			let fadeDuration = FADE_DURATION
 			obstacle.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
@@ -2250,21 +2435,31 @@ function draw() {
 		if (distanceToIndicator < trophy.radius && !trophy.levelChanged) {
 			// Trophy has contacted the score indicator:
 			//  - wait a short delay, then increment the score
- 			//  - then change level (no grey-ball fade)
+			//  - then change level (no grey-ball fade)
 			trophy.levelChanged = true
 			trophy.scoreIncrementTime = Date.now() + 200 // delay score increment by 0.2s
 			trophy.scoreIncremented = false
-			trophy.nextLevelTime = Date.now() + FADE_DURATION // change level after delay
+			// For levels after the first, wait 2 seconds after score increment before changing level
+			// For level 1, use the original timing
+			if (level > 1) {
+				trophy.nextLevelTime = null // Will be set after score increments
+			} else {
+				trophy.nextLevelTime = Date.now() + FADE_DURATION // change level after delay
+			}
 		}
 
 		// Apply the delayed score increment once the delay has passed
 		if (trophy.levelChanged && !trophy.scoreIncremented && trophy.scoreIncrementTime && Date.now() >= trophy.scoreIncrementTime) {
 			completionScore++
 			trophy.scoreIncremented = true
+			// For levels after the first, set next level time to 2 seconds after score increment
+			if (level > 1 && trophy.nextLevelTime === null) {
+				trophy.nextLevelTime = Date.now() + 2000 // 2 seconds after score increment
+			}
 		}
- 		
- 		// Change level after the scheduled delay (no grey-ball fade)
- 		if (trophy.levelChanged && trophy.nextLevelTime && Date.now() >= trophy.nextLevelTime) {
+		
+		// Change level after the scheduled delay (no grey-ball fade)
+		if (trophy.levelChanged && trophy.nextLevelTime && Date.now() >= trophy.nextLevelTime) {
 			trophy = null
 			pendingNextLevel = false
 			// Mark that we've completed at least one level so future levels
@@ -2390,8 +2585,11 @@ function drawTargets() {
 		let x = target.xPos
 		let y = target.yPos
 		
-		// Get opacity (fade-in or default to 1.0)
-		let opacity = target.fadeInOpacity !== undefined ? target.fadeInOpacity : 1.0
+		// Get opacity (fade-in or default to 0 to prevent flashing)
+		let opacity = 0
+		if (target.fadeInOpacity !== undefined) {
+			opacity = Math.max(0, Math.min(1.0, target.fadeInOpacity))
+		}
 		
 		ctx.save()
 		ctx.globalAlpha = opacity
@@ -2427,12 +2625,17 @@ function drawObstacles() {
 		// Emergency fallback: if fadeInOpacity is somehow still undefined, initialize it now
 		if (obstacle.fadeInOpacity === undefined || obstacle.fadeInStartTime === undefined) {
 			obstacle.fadeInOpacity = 0
-			obstacle.fadeInStartTime = Date.now()
+			obstacle.fadeInStartTime = Date.now() + FADE_IN_DELAY
 			opacity = 0
 		} else if (!obstacle.fading) {
 			// Use fade-in opacity if not fading out
-			// Ensure we never use a value > 1.0 or < 0
-			opacity = Math.max(0, Math.min(1.0, obstacle.fadeInOpacity))
+			// CRITICAL: Only use fade-in opacity if it's been initialized and start time has passed
+			if (obstacle.fadeInStartTime <= Date.now()) {
+				opacity = Math.max(0, Math.min(1.0, obstacle.fadeInOpacity))
+			} else {
+				// If fade-in hasn't started yet, keep at 0
+				opacity = 0
+			}
 		}
 		
 		// Fade-out takes priority over fade-in
@@ -2467,7 +2670,23 @@ function drawStar() {
 	let x = star.xPos
 	let y = star.yPos
 	
+	// Initialize fade-in if missing
+	if (star.fadeInOpacity === undefined || star.fadeInStartTime === undefined) {
+		star.fadeInOpacity = 0
+		star.fadeInStartTime = Date.now() + FADE_IN_DELAY
+	}
+	
+	// Update fade-in only if start time has passed
+	if (star.fadeInOpacity < 1.0 && star.fadeInStartTime <= Date.now()) {
+		let elapsed = Date.now() - star.fadeInStartTime
+		let fadeDuration = FADE_DURATION
+		star.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
+	}
+	
+	let opacity = Math.max(0, Math.min(1.0, star.fadeInOpacity !== undefined ? star.fadeInOpacity : 0))
+	
 	ctx.save()
+	ctx.globalAlpha = opacity
 	
 	// Draw white star (5-pointed) with bright white fill and outline
 	ctx.fillStyle = "#ffffff"
@@ -2504,7 +2723,23 @@ function drawSwitcher() {
 	let x = switcher.xPos
 	let y = switcher.yPos
 	
+	// Initialize fade-in if missing
+	if (switcher.fadeInOpacity === undefined || switcher.fadeInStartTime === undefined) {
+		switcher.fadeInOpacity = 0
+		switcher.fadeInStartTime = Date.now() + FADE_IN_DELAY
+	}
+	
+	// Update fade-in only if start time has passed
+	if (switcher.fadeInOpacity < 1.0 && switcher.fadeInStartTime <= Date.now()) {
+		let elapsed = Date.now() - switcher.fadeInStartTime
+		let fadeDuration = FADE_DURATION
+		switcher.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
+	}
+	
+	let opacity = Math.max(0, Math.min(1.0, switcher.fadeInOpacity !== undefined ? switcher.fadeInOpacity : 0))
+	
 	ctx.save()
+	ctx.globalAlpha = opacity
 	
 	// Draw black background circle (no outline)
 	ctx.fillStyle = "#000000"
@@ -2590,7 +2825,23 @@ function drawSkull() {
 	let x = skull.xPos
 	let y = skull.yPos
 	
+	// Initialize fade-in if missing
+	if (skull.fadeInOpacity === undefined || skull.fadeInStartTime === undefined) {
+		skull.fadeInOpacity = 0
+		skull.fadeInStartTime = Date.now() + FADE_IN_DELAY
+	}
+	
+	// Update fade-in only if start time has passed
+	if (skull.fadeInOpacity < 1.0 && skull.fadeInStartTime <= Date.now()) {
+		let elapsed = Date.now() - skull.fadeInStartTime
+		let fadeDuration = FADE_DURATION
+		skull.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
+	}
+	
+	let opacity = Math.max(0, Math.min(1.0, skull.fadeInOpacity !== undefined ? skull.fadeInOpacity : 0))
+	
 	ctx.save()
+	ctx.globalAlpha = opacity
 	
 	// Draw white skull (circle for head)
 	ctx.fillStyle = "#ffffff"
