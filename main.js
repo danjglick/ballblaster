@@ -2750,8 +2750,8 @@ function drawSwitcher() {
 	// Draw two thick, curved white arrows forming an almost complete circle with gaps
 	let circleRadius = radius * 0.5 // Radius of the circular path
 	let arrowThickness = radius * 0.25 // Thickness of arrow body (thick and bold)
-	let arrowHeadSize = radius * 0.3 // Size of arrowhead
-	let gapSize = Math.PI * 0.25 // Gap between arrows (larger gap for better visibility)
+	let arrowHeadSize = radius * 0.4 // Size of arrowhead (larger for more pronounced triangle)
+	let gapSize = Math.PI * 0.35 // Gap between arrows (larger gap for better visibility)
 	let arrowArcLength = (Math.PI * 2 - gapSize * 2) / 2 // Each arrow covers half the remaining circle
 	
 	// Top arrow: starts from left-middle, curves clockwise up and right, arrowhead points right
@@ -2777,16 +2777,16 @@ function drawSwitcher() {
 	ctx.arc(0, 0, circleRadius, topArrowStartAngle, topArrowEndAngle)
 	ctx.stroke()
 	
-	// Draw top arrowhead (pointing right)
+	// Draw top arrowhead (pointing right) - symmetrical triangle
 	let topArrowHeadX = Math.cos(topArrowEndAngle) * circleRadius
 	let topArrowHeadY = Math.sin(topArrowEndAngle) * circleRadius
 	ctx.save()
 	ctx.translate(topArrowHeadX, topArrowHeadY)
 	ctx.rotate(topArrowEndAngle + Math.PI / 2) // Point along the tangent
 	ctx.beginPath()
-	ctx.moveTo(0, 0)
-	ctx.lineTo(-arrowHeadSize, -arrowHeadSize * 0.6)
-	ctx.lineTo(arrowHeadSize, -arrowHeadSize * 0.6)
+	ctx.moveTo(arrowHeadSize * 1.2, 0) // Tip of arrow (pointing forward along arrow line)
+	ctx.lineTo(0, -arrowHeadSize * 0.7) // Base point on one side
+	ctx.lineTo(0, arrowHeadSize * 0.7) // Base point on other side (symmetric)
 	ctx.closePath()
 	ctx.fill()
 	ctx.restore()
@@ -2799,16 +2799,16 @@ function drawSwitcher() {
 	ctx.arc(0, 0, circleRadius, bottomArrowStartAngle, bottomArrowEndAngle)
 	ctx.stroke()
 	
-	// Draw bottom arrowhead (pointing left)
+	// Draw bottom arrowhead (pointing left) - symmetrical triangle
 	let bottomArrowHeadX = Math.cos(bottomArrowEndAngle) * circleRadius
 	let bottomArrowHeadY = Math.sin(bottomArrowEndAngle) * circleRadius
 	ctx.save()
 	ctx.translate(bottomArrowHeadX, bottomArrowHeadY)
 	ctx.rotate(bottomArrowEndAngle + Math.PI / 2) // Point along the tangent
 	ctx.beginPath()
-	ctx.moveTo(0, 0)
-	ctx.lineTo(-arrowHeadSize, -arrowHeadSize * 0.6)
-	ctx.lineTo(arrowHeadSize, -arrowHeadSize * 0.6)
+	ctx.moveTo(arrowHeadSize * 1.2, 0) // Tip of arrow (pointing forward along arrow line, away from arrow)
+	ctx.lineTo(0, -arrowHeadSize * 0.7) // Base point on one side
+	ctx.lineTo(0, arrowHeadSize * 0.7) // Base point on other side (symmetric)
 	ctx.closePath()
 	ctx.fill()
 	ctx.restore()
