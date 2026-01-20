@@ -5,12 +5,18 @@ const FPS = 30
 const MS_PER_FRAME = 1000 / FPS
 function getShim() { return (canvas?.width || window.innerWidth) / 10 }
 function getBallRadius() { return (canvas?.width || window.innerWidth) / 20 }
-function getTeammateRadius() { return (canvas?.width || window.innerWidth) / 20 }
+function getTargetRadius() { return (canvas?.width || window.innerWidth) / 20 }
 const FRICTION = .99
 const FLING_DIVISOR = 2
-const BALL_STOP_SPEED = 10// Higher threshold so we treat the ball as "stopped" sooner
-const BALL_MIN_CONTINUE_SPEED = 3 // If above this and path will clear all teammates, don't auto-reset yet
-const AUTO_RESET_DURATION = 1000 // ms for ball move-back + teammate fade-in
+const BALL_STOP_SPEED = 10 // Higher threshold so we treat the ball as "stopped" sooner
+const TOUCH_TOLERANCE = 20 // Extra pixels for touch detection
+const SPAWN_ANIMATION_DURATION = 700 // ms for ball spawn animation
+const FADE_DURATION = 1000 // ms for fade animations
+const TROPHY_PLACEMENT_DELAY = 2000 // ms delay before placing trophy
+const TUTORIAL_FADE_DELAY = 2000 // ms delay before fading tutorial
+const OBSTACLE_FADE_DELAY = 1000 // ms delay before fading obstacles
+const BALL_MIN_CONTINUE_SPEED = 3 // If above this and path will clear all targets, don't auto-reset yet
+const AUTO_RESET_DURATION = 1000 // ms for ball move-back + target fade-in
 
 let canvas;
 let ctx;
@@ -20,28 +26,24 @@ let ball = {
 	xVel: 0,
 	yVel: 0,
 	isBeingFlung: false,
-	fadeOpacity: 1.0,
- 	fadeState: "none", // (legacy; no longer fading the ball)
- 	fadeStartTime: 0
+	fadeOpacity: 1.0
 }
-let team = []
-let teamRemaining = []
+let targets = []
+let targetsRemaining = []
 let obstacles = []
-let door = null // Door that appears after collecting all teammates
-let savedTeam = [] // Saved positions for retry
+let trophy = null // Trophy that appears after collecting all targets
+let savedTargets = [] // Saved positions for retry
 let savedObstacles = [] // Saved positions for retry
 let savedBall = null // Saved ball position for retry
-let wall = []
-let walls = []
 let isConvertingObstacle = false
-let selectedForConversion = null // { type: 'obstacle' | 'teammate', index: number }
+let selectedForConversion = null // { type: 'obstacle' | 'target', index: number }
 let touch1 = {
 	xPos: 0,
 	yPos: 0
 }
-// Track where the last teammate was collected so we can place the trophy there
-let lastTeammateX = null
-let lastTeammateY = null
+// Track where the last target was collected so we can place the trophy there
+let lastTargetX = null
+let lastTargetY = null
 // Track previous ball position so we can animate to the next level's starting spot
 let previousBallX = null
 let previousBallY = null
@@ -57,15 +59,9 @@ let tutorialLastY = null
 // For the very first level only, fade in the grey ball and score.
 let initialIntroActive = true
 let initialIntroStartTime = 0
-// Legacy: intro text prompt has been removed; these flags are unused but kept for now.
-let showIntroPrompt = false
-let introPromptHideAt = 0
-let introPromptPlaced = false
-let introPromptX = 0
-let introPromptY = 0
 // Track when a "shot" is in progress (ball has been flung this level)
 let shotActive = false
-// Track auto-reset animation when a shot fails (ball moves back, teammates fade in)
+// Track auto-reset animation when a shot fails (ball moves back, targets fade in)
 let autoResetActive = false
 let autoResetStartTime = 0
 let autoResetBallFromX = 0
@@ -76,14 +72,11 @@ let tries = 0
 let levelScore = 0
 let totalScore = 0
 let pointsThisLevel = 0 // Track points gained during current level for retry
-let completionScore = 0 // Score for completing levels (clearing all teammates)
+let completionScore = 0 // Score for completing levels (clearing all targets)
 let scoreIncrementDisplay = null // { opacity: 1.0, timeLeft: 1.0, amount: 1 } for showing +1 indicator
 let level = 0
 let gameLoopTimeout = null
 let fireworks = []
-let showGoodJob = false
-let goodJobMessage = "GOOD JOB"
-let goodJobTimeout = null
 let obstacleExplosionTimeout = null
 let tutorialExplosionTimeout = null
 let nextLevelTimeout = null
@@ -100,10 +93,6 @@ function initializeGame() {
 	initialIntroStartTime = Date.now()
 	ball.fadeOpacity = 0.0
 	window.addEventListener("resize", resizeCanvas)
-	// Don't listen to visualViewport resize - it can cause zoom issues
-	// if (visualViewport) {
-	// 	visualViewport.addEventListener("resize", resizeCanvas)
-	// }
 	document.addEventListener("touchstart", handleTouchstart)
 	document.addEventListener("touchmove", handleTouchmove, { passive: false })
 	document.addEventListener("touchend", handleTouchend)
@@ -125,7 +114,7 @@ function initializeGame() {
 		e.preventDefault()
 		e.stopPropagation()
 		e.stopImmediatePropagation()
-		// If tries === 0, go to next level with one fewer teammate and obstacle
+		// If tries === 0, go to next level with one fewer target and obstacle
 		if (tries === 0) {
 			generateLevel(false, true) // false = not a normal retry, true = fewer sprites
 		} else {
@@ -203,34 +192,26 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 	}
 	if (!isRetry || fewerSprites) {
 		if (!fewerSprites) {
-			// Only increment level if not using fewer sprites (normal next button)
 			level++
 		}
 		if (fewerSprites) {
-			// Go to next level but with one fewer teammate and obstacle
-			// Temporarily disabled - always use 5
-			// let currentCount = team.length > 0 ? team.length : obstacles.length > 0 ? obstacles.length : level
-			// let targetCount = Math.max(1, currentCount - 1)
-			placeTeamWithCount(5)
+			placeTargetsWithCount(5)
 			placeObstaclesWithCount(5)
-			// Set level to match the sprite count so tutorial shows correctly
-			// This effectively "goes back a level" in terms of tutorial display
-			// level = targetCount // Temporarily disabled
 		} else {
-			placeTeam()
+			placeTargets()
 			placeObstacles()
 		}
 		placeBall()
 		// Save positions after placing (for future retries)
-		savedTeam = JSON.parse(JSON.stringify(team))
+		savedTargets = JSON.parse(JSON.stringify(targets))
 		savedObstacles = JSON.parse(JSON.stringify(obstacles))
 		savedBall = JSON.parse(JSON.stringify(ball))
 	} else {
-		// Normal retry - restore obstacles and teammates for current level
+		// Normal retry - restore obstacles and targets for current level
 		// Level stays the same, so tutorial stays the same
-		if (shouldRestorePositions && savedTeam.length > 0 && savedObstacles.length > 0 && savedBall) {
+		if (shouldRestorePositions && savedTargets.length > 0 && savedObstacles.length > 0 && savedBall) {
 			// Restore saved positions
-			team = JSON.parse(JSON.stringify(savedTeam))
+			targets = JSON.parse(JSON.stringify(savedTargets))
 			obstacles = JSON.parse(JSON.stringify(savedObstacles))
 			ball = JSON.parse(JSON.stringify(savedBall))
 			// Reset ball velocity
@@ -239,27 +220,24 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 			ball.isBeingFlung = false
 		} else {
 			// Generate new positions (first retry or no saved positions)
-			placeTeam()
+			placeTargets()
 			placeObstacles()
 			placeBall()
 			// Save positions for future retries
-			savedTeam = JSON.parse(JSON.stringify(team))
+			savedTargets = JSON.parse(JSON.stringify(targets))
 			savedObstacles = JSON.parse(JSON.stringify(obstacles))
 			savedBall = JSON.parse(JSON.stringify(ball))
 		}
 	}
-	teamRemaining = JSON.parse(JSON.stringify(team))
-	walls = []
-	wall = []
+	targetsRemaining = JSON.parse(JSON.stringify(targets))
 	fireworks = []
-	door = null // Reset trophy for new level
+	trophy = null // Reset trophy for new level
 	pendingNextLevel = false
 	autoResetActive = false
  
 	// Ensure grey ball is fully visible (no fade behavior)
 	if (ball) {
 		ball.fadeOpacity = 1.0
-		ball.fadeState = "none"
 	}
 
 	// If this is a new level AFTER the first completion (not a retry) and we know
@@ -282,14 +260,8 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 		ball.isBeingFlung = false
 	}
 	selectedForConversion = null
-	showGoodJob = false
 	scoreIncrementDisplay = null // Reset score increment display
-	goodJobMessage = "GOOD JOB"
 	// Clear any pending timeouts
-	if (goodJobTimeout !== null) {
-		clearTimeout(goodJobTimeout)
-		goodJobTimeout = null
-	}
 	if (obstacleExplosionTimeout !== null) {
 		clearTimeout(obstacleExplosionTimeout)
 		obstacleExplosionTimeout = null
@@ -336,6 +308,38 @@ function loopGame() { // MAIN GAME LOOP
 	gameLoopTimeout = setTimeout(loopGame, MS_PER_FRAME)
 }
 
+function convertTargetAndObstacle(targetIndex, obstacleIndex) {
+	let target = targetsRemaining[targetIndex]
+	let obstacle = obstacles[obstacleIndex]
+	let targetRadius = getTargetRadius()
+	
+	// Save positions
+	let obstacleX = obstacle.xPos
+	let obstacleY = obstacle.yPos
+	let targetX = target.xPos
+	let targetY = target.yPos
+	
+	// Remove both from their arrays
+	obstacles.splice(obstacleIndex, 1)
+	targetsRemaining.splice(targetIndex, 1)
+	
+	// Convert obstacle to target (at obstacle's position)
+	targetsRemaining.push({
+		xPos: obstacleX,
+		yPos: obstacleY
+	})
+	
+	// Convert target to obstacle (at target's position)
+	obstacles.push({
+		xPos: targetX,
+		yPos: targetY,
+		radius: targetRadius
+	})
+	
+	selectedForConversion = null
+	isConvertingObstacle = true
+}
+
 function handleTouchstart(e) {
 	// Convert screen coordinates to canvas coordinates
 	let canvasRect = canvas.getBoundingClientRect()
@@ -352,115 +356,17 @@ function handleTouchstart(e) {
 		return
 	}
 	
-	// For testing: clicking the level indicator explodes all blue balls
-	ctx.font = "bold 56px Arial"
-	let scoreText = `${completionScore}`
-	let scoreWidth = ctx.measureText(scoreText).width + 10 // Add padding
-	let scoreHeight = 60 // Approximate height for score text
-	let scoreX = canvas.width - 12 - scoreWidth // Right-aligned with padding
-	let scoreY = 56
-	if (touch1.xPos >= scoreX && touch1.xPos <= scoreX + scoreWidth &&
-	    touch1.yPos >= scoreY - scoreHeight && touch1.yPos <= scoreY) {
-		// Clicked on score - explode all teammates
-		// For trophy placement, pick one teammate at random (if any) and remember its position
-		if (teamRemaining.length > 0) {
-			let randomIndex = Math.floor(Math.random() * teamRemaining.length)
-			let chosen = teamRemaining[randomIndex]
-			lastTeammateX = chosen.xPos
-			lastTeammateY = chosen.yPos
-		}
-		
-		for (let i = teamRemaining.length - 1; i >= 0; i--) {
-			let teammate = teamRemaining[i]
-			createFireworks(teammate.xPos, teammate.yPos)
-			teamRemaining.splice(i, 1)
-		}
-		// Treat as if last teammate was collected
-		if (teamRemaining.length === 0) {
-			// Determine message based on tries vs obstacles
-			let obstacleCount = obstacles.length
-			if (tries === 1) {
-				goodJobMessage = "GOOD JOB"
-			} else if (tries < obstacleCount - 1) {
-				goodJobMessage = "GOOD JOB"
-			} else if (tries >= obstacleCount - 1 && tries <= obstacleCount + 1) {
-				goodJobMessage = "OK JOB"
-			} else {
-				goodJobMessage = "BAD JOB"
-			}
-			
-			// Start fading obstacles and create red fireworks after 1 second delay
-			setTimeout(() => {
-				for (let j = 0; j < obstacles.length; j++) {
-					let obstacle = obstacles[j]
-					createFireworks(obstacle.xPos, obstacle.yPos, "red")
-					obstacle.fadeOpacity = 1.0
-					obstacle.fading = true
-				}
-			}, 1000)
-			
-			// Show message after tutorial text explodes (3 seconds total: 2s for tutorial + 1s delay)
-			goodJobTimeout = setTimeout(() => {
-				showGoodJob = true
-				goodJobTimeout = null
-			}, 3000)
-			
-			// Explode tutorial text after 2 seconds (1s + 1s)
-			tutorialExplosionTimeout = setTimeout(() => {
-				let tutorialOverlay = document.getElementById("tutorialOverlay")
-				if (tutorialOverlay && tutorialOverlay.style.visibility === "visible") {
-					// Hide and remove tutorial text (no fireworks)
-					tutorialOverlay.style.opacity = "0"
-				}
-				tutorialExplosionTimeout = null
-			}, 2000)
-			
-			// Place door after 2 seconds
-			setTimeout(() => {
-				placeDoor()
-			}, 2000)
-		}
-		return
-	}
-	
-	let teammateRadius = getTeammateRadius()
+	let targetRadius = getTargetRadius()
 	let ballRadius = getBallRadius()
 	
 	// Check if tapping on an obstacle (check before ball to prioritize smaller targets)
 	for (let i = obstacles.length - 1; i >= 0; i--) {
 		let obstacle = obstacles[i]
 		let distance = Math.hypot(touch1.xPos - obstacle.xPos, touch1.yPos - obstacle.yPos)
-		if (distance < teammateRadius + 20) {
-			if (selectedForConversion && selectedForConversion.type === 'teammate') {
-				// Second tap: we have a teammate selected, now tapping obstacle - convert both
-				let teammateIndex = selectedForConversion.index
-				let teammate = teamRemaining[teammateIndex]
-				
-				// Save positions
-				let obstacleX = obstacle.xPos
-				let obstacleY = obstacle.yPos
-				let teammateX = teammate.xPos
-				let teammateY = teammate.yPos
-				
-				// Remove both from their arrays
-				obstacles.splice(i, 1)
-				teamRemaining.splice(teammateIndex, 1)
-				
-				// Convert obstacle to teammate (at obstacle's position)
-				teamRemaining.push({
-					xPos: obstacleX,
-					yPos: obstacleY
-				})
-				
-				// Convert teammate to obstacle (at teammate's position)
-				obstacles.push({
-					xPos: teammateX,
-					yPos: teammateY,
-					radius: teammateRadius
-				})
-				
-				selectedForConversion = null
-				isConvertingObstacle = true
+		if (distance < targetRadius + TOUCH_TOLERANCE) {
+			if (selectedForConversion && selectedForConversion.type === 'target') {
+				// Second tap: we have a target selected, now tapping obstacle - convert both
+				convertTargetAndObstacle(selectedForConversion.index, i)
 				return
 			} else {
 				// First tap: select this obstacle
@@ -476,47 +382,20 @@ function handleTouchstart(e) {
 		}
 	}
 	
-	// Check if tapping on a teammate
-	for (let i = teamRemaining.length - 1; i >= 0; i--) {
-		let teammate = teamRemaining[i]
-		let distance = Math.hypot(touch1.xPos - teammate.xPos, touch1.yPos - teammate.yPos)
-		if (distance < teammateRadius + 20) {
+	// Check if tapping on a target
+	for (let i = targetsRemaining.length - 1; i >= 0; i--) {
+		let target = targetsRemaining[i]
+		let distance = Math.hypot(touch1.xPos - target.xPos, touch1.yPos - target.yPos)
+		if (distance < targetRadius + TOUCH_TOLERANCE) {
 			if (selectedForConversion && selectedForConversion.type === 'obstacle') {
-				// Second tap: we have an obstacle selected, now tapping teammate - convert both
-				let obstacleIndex = selectedForConversion.index
-				let obstacle = obstacles[obstacleIndex]
-				
-				// Save positions
-				let obstacleX = obstacle.xPos
-				let obstacleY = obstacle.yPos
-				let teammateX = teammate.xPos
-				let teammateY = teammate.yPos
-				
-				// Remove both from their arrays
-				obstacles.splice(obstacleIndex, 1)
-				teamRemaining.splice(i, 1)
-				
-				// Convert obstacle to teammate (at obstacle's position)
-				teamRemaining.push({
-					xPos: obstacleX,
-					yPos: obstacleY
-				})
-				
-				// Convert teammate to obstacle (at teammate's position)
-				obstacles.push({
-					xPos: teammateX,
-					yPos: teammateY,
-					radius: teammateRadius
-				})
-				
-				selectedForConversion = null
-				isConvertingObstacle = true
+				// Second tap: we have an obstacle selected, now tapping target - convert both
+				convertTargetAndObstacle(i, selectedForConversion.index)
 				return
 			} else {
-				// First tap: select this teammate
-				selectedForConversion = { type: 'teammate', index: i }
+				// First tap: select this target
+				selectedForConversion = { type: 'target', index: i }
 				
-				// Advance tutorial to switching mechanic once player taps a teammate.
+				// Advance tutorial to switching mechanic once player taps a target.
 				if (level === 1 && tutorialStep === 2 && !tutorialCompleted) {
 					tutorialStep = 3
 					updateTutorial()
@@ -526,9 +405,9 @@ function handleTouchstart(e) {
 		}
 	}
 	
-	// Check if tapping on the ball (check after teammates/obstacles to avoid blocking them)
+	// Check if tapping on the ball (check after targets/obstacles to avoid blocking them)
 	let ballDistance = Math.hypot(touch1.xPos - ball.xPos, touch1.yPos - ball.yPos)
-	if (ballDistance < ballRadius + 20) {
+	if (ballDistance < ballRadius + TOUCH_TOLERANCE) {
 		// If the ball is still moving fast enough, ignore this tap so you can't "double-fling".
 		let currentSpeed = Math.hypot(ball.xVel, ball.yVel)
 		if (currentSpeed > BALL_STOP_SPEED) {
@@ -537,7 +416,7 @@ function handleTouchstart(e) {
 
 		selectedForConversion = null // Clear selection if touching ball
 		ball.isBeingFlung = true
-		// Start a new "shot" – we care whether this single fling clears all teammates.
+		// Start a new "shot" – we care whether this single fling clears all targets.
 		shotActive = true
 		// Handle tutorial progression when the ball is flung.
 		// Level 1: multi-step tutorial (only advance 1 -> 2 here).
@@ -562,19 +441,6 @@ function handleTouchstart(e) {
 	
 	// If tapping empty space, clear selection
 	selectedForConversion = null
-
-	// Debug tap: if the ball is currently moving and you tap empty space on the game
-	// screen, treat this as "I wish the ball stopped now" and log its speed/position.
-	let speed = Math.hypot(ball.xVel, ball.yVel)
-	if (speed > 0.01) {
-		// This doesn't change gameplay, it's just a dev signal for tuning.
-		console.log("[DEBUG_STOP_TAP]", {
-			speed,
-			ballX: ball.xPos,
-			ballY: ball.yPos,
-			time: Date.now()
-		})
-	}
 }
 
 function handleTouchmove(e) {
@@ -596,7 +462,7 @@ function handleTouchend() {
 
 function placeBall() {
 	let radius = getBallRadius()
-	let teammateRadius = getTeammateRadius()
+	let targetRadius = getTargetRadius()
 	let minSeparation = 5 // Minimum gap between sprite edges
 	let maxAttempts = 100
 	let attempts = 0
@@ -618,13 +484,13 @@ function placeBall() {
 		
 		validPosition = true
 		
-		// Check distance from existing teammates using proper Euclidean distance
-		for (let i = 0; i < team.length; i++) {
-			let teammate = team[i]
-			let dx = xPos - teammate.xPos
-			let dy = yPos - teammate.yPos
+		// Check distance from existing targets using proper Euclidean distance
+		for (let i = 0; i < targets.length; i++) {
+			let target = targets[i]
+			let dx = xPos - target.xPos
+			let dy = yPos - target.yPos
 			let distance = Math.hypot(dx, dy)
-			let minDistance = radius + teammateRadius + minSeparation
+			let minDistance = radius + targetRadius + minSeparation
 			if (distance < minDistance) {
 				validPosition = false
 				break
@@ -649,9 +515,9 @@ function placeBall() {
 	}
 }
 
-function placeTeamWithCount(teammateCount) {
-	team = []
-	let radius = getTeammateRadius()
+function placeTargetsWithCount(targetCount) {
+	targets = []
+	let radius = getTargetRadius()
 	let ballRadius = getBallRadius()
 	let minSeparation = 5 // Minimum gap between sprite edges
 	let maxAttempts = 100
@@ -661,13 +527,13 @@ function placeTeamWithCount(teammateCount) {
 	// diameters of the bottom edge.
 	let bottomExclusion = 8 * ballRadius // 4 * (2 * ballRadius)
 	
-	for (let i = 0; i < teammateCount; i++) {
+	for (let i = 0; i < targetCount; i++) {
 		let attempts = 0
 		let xPos, yPos
 		let validPosition = false
 		
 		while (!validPosition && attempts < maxAttempts) {
-			// Ensure teammate is fully within canvas bounds, and not too close
+			// Ensure target is fully within canvas bounds, and not too close
 			// to the bottom edge.
 			xPos = radius + (canvas.width - 2 * radius) * Math.random()
 			// Exclude top area unless high level, and also exclude a band
@@ -686,11 +552,11 @@ function placeTeamWithCount(teammateCount) {
 				validPosition = false
 			}
 			
-			// Check distance from other teammates using proper Euclidean distance
+			// Check distance from other targets using proper Euclidean distance
 			if (validPosition) {
-				for (let j = 0; j < team.length; j++) {
-					let dx2 = xPos - team[j].xPos
-					let dy2 = yPos - team[j].yPos
+				for (let j = 0; j < targets.length; j++) {
+					let dx2 = xPos - targets[j].xPos
+					let dy2 = yPos - targets[j].yPos
 					let distance2 = Math.hypot(dx2, dy2)
 					let minDistance2 = radius + radius + minSeparation
 					if (distance2 < minDistance2) {
@@ -711,7 +577,7 @@ function placeTeamWithCount(teammateCount) {
 			yPos = minY + (maxY - minY) * Math.random()
 		}
 		
-		team.push({ 
+		targets.push({ 
 			xPos: xPos, 
 			yPos: yPos,
 			fadeInOpacity: 0, // Start invisible for fade-in
@@ -722,9 +588,9 @@ function placeTeamWithCount(teammateCount) {
 
 function placeObstaclesWithCount(obstacleCount) {
 	obstacles = []
-	let obstacleRadius = getTeammateRadius()
+	let obstacleRadius = getTargetRadius()
 	let ballRadius = getBallRadius()
-	let teammateRadius = getTeammateRadius()
+	let targetRadius = getTargetRadius()
 	let minSeparation = 5 // Minimum gap between sprite edges
 	// No exclusion zone - score and buttons are disabled
 	let topExclusionZone = 0
@@ -757,13 +623,13 @@ function placeObstaclesWithCount(obstacleCount) {
 				validPosition = false
 			}
 			
-			// Check distance from teammates using proper Euclidean distance
+			// Check distance from targets using proper Euclidean distance
 			if (validPosition) {
-				for (let j = 0; j < team.length; j++) {
-					let dx2 = xPos - team[j].xPos
-					let dy2 = yPos - team[j].yPos
+				for (let j = 0; j < targets.length; j++) {
+					let dx2 = xPos - targets[j].xPos
+					let dy2 = yPos - targets[j].yPos
 					let distance2 = Math.hypot(dx2, dy2)
-					let minDistance2 = obstacleRadius + teammateRadius + minSeparation
+					let minDistance2 = obstacleRadius + targetRadius + minSeparation
 					if (distance2 < minDistance2) {
 						validPosition = false
 						break
@@ -806,53 +672,9 @@ function placeObstaclesWithCount(obstacleCount) {
 	}
 }
 
-function placeObstacleAtPosition(xPos, yPos) {
-	let obstacleRadius = getTeammateRadius()
-	let minDistance = getShim() * 1.5
-	
-	// Check if position is valid (not too close to ball, teammates, or other obstacles)
-	let validPosition = true
-	
-	// Check distance from ball
-	if (isObjectCloseToObject({xPos, yPos}, minDistance + obstacleRadius, ball)) {
-		validPosition = false
-	}
-	
-	// Check distance from teammates
-	if (validPosition) {
-		for (let j = 0; j < teamRemaining.length; j++) {
-			if (isObjectCloseToObject({xPos, yPos}, minDistance + obstacleRadius, teamRemaining[j])) {
-				validPosition = false
-				break
-			}
-		}
-	}
-	
-	// Check distance from other obstacles
-	if (validPosition) {
-		for (let j = 0; j < obstacles.length; j++) {
-			if (isObjectCloseToObject({xPos, yPos}, minDistance, obstacles[j])) {
-				validPosition = false
-				break
-			}
-		}
-	}
-	
-	// Place obstacle if position is valid
-	if (validPosition) {
-		obstacles.push({ 
-			xPos: xPos, 
-			yPos: yPos,
-			radius: obstacleRadius,
-			fadeInOpacity: 0, // Start invisible for fade-in
-			fadeInStartTime: Date.now()
-		})
-	}
-}
-
-function placeDoor() {
-	// Make the trophy substantially larger than teammates.
-	let doorRadius = getTeammateRadius() * 4.5
+function placeTrophy() {
+	// Make the trophy substantially larger than targets.
+	let trophyRadius = getTargetRadius() * 4.5
 	let ballRadius = getBallRadius()
 	let minSeparation = 5
 	
@@ -892,13 +714,13 @@ function placeDoor() {
 	let validPosition = false
 	
 	// Minimum vertical separation between trophy and ball's new bottom position
-	let minVerticalSeparation = 3 * (doorRadius + ballRadius)
+	let minVerticalSeparation = 3 * (trophyRadius + ballRadius)
 	let ballBottomY = ballTargetY + ballRadius
 	
 		while (!validPosition && attempts < maxAttempts) {
 			// Random position on canvas
-			xPos = doorRadius + (canvas.width - 2 * doorRadius) * Math.random()
-			yPos = doorRadius + (canvas.height - 2 * doorRadius) * Math.random()
+			xPos = trophyRadius + (canvas.width - 2 * trophyRadius) * Math.random()
+			yPos = trophyRadius + (canvas.height - 2 * trophyRadius) * Math.random()
 			validPosition = true
 			
 			// Never place the trophy in the top-right quadrant of the board
@@ -908,7 +730,7 @@ function placeDoor() {
 
 			// Ensure the trophy is positioned well above the ball's new bottom position
 			if (validPosition) {
-				let trophyTopY = yPos - doorRadius
+				let trophyTopY = yPos - trophyRadius
 				if (trophyTopY > ballBottomY - minVerticalSeparation) {
 					validPosition = false
 				}
@@ -925,10 +747,10 @@ function placeDoor() {
 				let scoreTop = scoreBottom - scoreDigitHeight
 
 				if (
-					xPos + doorRadius > scoreLeft &&
-					xPos - doorRadius < scoreRight &&
-					yPos + doorRadius > scoreTop &&
-					yPos - doorRadius < scoreBottom
+					xPos + trophyRadius > scoreLeft &&
+					xPos - trophyRadius < scoreRight &&
+					yPos + trophyRadius > scoreTop &&
+					yPos - trophyRadius < scoreBottom
 				) {
 					validPosition = false
 				}
@@ -942,28 +764,28 @@ function placeDoor() {
 		xPos = canvas.width / 2
 		yPos = canvas.height / 2
 		// Still ensure it's above the ball's bottom position
-		if (yPos - doorRadius > ballBottomY - minVerticalSeparation) {
-			yPos = ballBottomY - minVerticalSeparation + doorRadius
+		if (yPos - trophyRadius > ballBottomY - minVerticalSeparation) {
+			yPos = ballBottomY - minVerticalSeparation + trophyRadius
 		}
 	}
 	
-	door = {
+	trophy = {
 		xPos: xPos,
 		yPos: yPos,
-		radius: doorRadius,
+		radius: trophyRadius,
 		fadeInOpacity: 0, // Start invisible for fade-in
 		fadeInStartTime: Date.now()
 	}
 	
-	// Clear the last teammate position once we've placed the trophy
-	lastTeammateX = null
-	lastTeammateY = null
+	// Clear the last target position once we've placed the trophy
+	lastTargetX = null
+	lastTargetY = null
 }
 
-function placeTeam() {
-	// Always use 5 teammates on every level (including level 1).
-	let teammateCount = 5
-	placeTeamWithCount(teammateCount)
+function placeTargets() {
+	// Always use 5 targets on every level (including level 1).
+	let targetCount = 5
+	placeTargetsWithCount(targetCount)
 }
 
 function placeObstacles() {
@@ -976,7 +798,7 @@ function placeObstacles() {
 function moveBall() {
 	// If the ball is animating into its starting spot for a new level, override normal motion
 	if (ball && ball.isSpawningToStart) {
-		let duration = 700 // ms for the spawn animation
+		let duration = SPAWN_ANIMATION_DURATION
 		let elapsed = Date.now() - ball.spawnStartTime
 		let t = Math.min(1, Math.max(0, elapsed / duration))
 		
@@ -1023,16 +845,16 @@ function moveBall() {
 	ball.yVel *= FRICTION
 
 	// If a shot is in progress, the ball has effectively stopped (after the fling),
-	// and we still have teammates remaining, start a quick animated reset of this
+	// and we still have targets remaining, start a quick animated reset of this
 	// level: ball glides back to its starting spot while previously-cleared
-	// teammates fade back in, both finishing at the same time.
-	if (shotActive && !ball.isBeingFlung && !pendingNextLevel && !isGeneratingLevel && teamRemaining.length > 0) {
+	// targets fade back in, both finishing at the same time.
+	if (shotActive && !ball.isBeingFlung && !pendingNextLevel && !isGeneratingLevel && targetsRemaining.length > 0) {
 		let speed = Math.hypot(ball.xVel, ball.yVel)
 		if (speed < BALL_STOP_SPEED) {
 			// If the ball is still moving fast enough and our simple straight-line-
-			// with-friction prediction says it will clear all remaining teammates,
+			// with-friction prediction says it will clear all remaining targets,
 			// don't end the run yet.
-			if (speed >= BALL_MIN_CONTINUE_SPEED && willClearAllTeammatesOnCurrentPath()) {
+			if (speed >= BALL_MIN_CONTINUE_SPEED && willClearAllTargetsOnCurrentPath()) {
 				return
 			}
 
@@ -1055,34 +877,34 @@ function moveBall() {
 			ball.yVel = 0
 			ball.isBeingFlung = false
 
-			// Rebuild teamRemaining from the original team, fading back in any
-			// teammates that were already collected during this shot.
-			if (team && team.length > 0) {
-				let newTeamRemaining = []
-				for (let i = 0; i < team.length; i++) {
-					let fullTeammate = team[i]
-					// Check if this teammate is still in teamRemaining (by position)
-					let exists = teamRemaining.some(t =>
-						Math.abs(t.xPos - fullTeammate.xPos) < 0.5 &&
-						Math.abs(t.yPos - fullTeammate.yPos) < 0.5
+			// Rebuild targetsRemaining from the original targets, fading back in any
+			// targets that were already collected during this shot.
+			if (targets && targets.length > 0) {
+				let newTargetsRemaining = []
+				for (let i = 0; i < targets.length; i++) {
+					let fullTarget = targets[i]
+					// Check if this target is still in targetsRemaining (by position)
+					let exists = targetsRemaining.some(t =>
+						Math.abs(t.xPos - fullTarget.xPos) < 0.5 &&
+						Math.abs(t.yPos - fullTarget.yPos) < 0.5
 					)
 					if (exists) {
 						// Keep as-is (already visible)
-						newTeamRemaining.push({
-							xPos: fullTeammate.xPos,
-							yPos: fullTeammate.yPos
+						newTargetsRemaining.push({
+							xPos: fullTarget.xPos,
+							yPos: fullTarget.yPos
 						})
 					} else {
 						// Bring back with fade-in synced to the ball reset
-						newTeamRemaining.push({
-							xPos: fullTeammate.xPos,
-							yPos: fullTeammate.yPos,
+						newTargetsRemaining.push({
+							xPos: fullTarget.xPos,
+							yPos: fullTarget.yPos,
 							fadeInOpacity: 0,
 							fadeInStartTime: autoResetStartTime
 						})
 					}
 				}
-				teamRemaining = newTeamRemaining
+				targetsRemaining = newTargetsRemaining
 			}
 			return
 		}
@@ -1091,19 +913,19 @@ function moveBall() {
 
 // Simple predictive check: simulate the ball's current straight-line motion with
 // friction for a short time window and see if it would pass over all remaining
-// teammates. Ignores walls/obstacles but is good enough to avoid ending a run
+// targets. Ignores obstacles but is good enough to avoid ending a run
 // that is clearly about to succeed.
-function willClearAllTeammatesOnCurrentPath() {
-	if (!ball || teamRemaining.length === 0) return false
+function willClearAllTargetsOnCurrentPath() {
+	if (!ball || targetsRemaining.length === 0) return false
 
 	let simX = ball.xPos
 	let simY = ball.yPos
 	let simVX = ball.xVel
 	let simVY = ball.yVel
-	let simTeam = teamRemaining.map(t => ({ xPos: t.xPos, yPos: t.yPos }))
+	let simTargets = targetsRemaining.map(t => ({ xPos: t.xPos, yPos: t.yPos }))
 
 	let ballRadius = getBallRadius()
-	let teammateRadius = getTeammateRadius()
+	let targetRadius = getTargetRadius()
 	let maxSteps = 90 // about 3 seconds at 30 FPS
 	let minSpeed = 0.5
 
@@ -1117,18 +939,18 @@ function willClearAllTeammatesOnCurrentPath() {
 		let speed = Math.hypot(simVX, simVY)
 		if (speed < minSpeed) break
 
-		// Check for hits on remaining teammates
-		for (let i = simTeam.length - 1; i >= 0; i--) {
-			let t = simTeam[i]
+		// Check for hits on remaining targets
+		for (let i = simTargets.length - 1; i >= 0; i--) {
+			let t = simTargets[i]
 			let dx = simX - t.xPos
 			let dy = simY - t.yPos
 			let dist = Math.hypot(dx, dy)
-			if (dist < ballRadius + teammateRadius) {
-				simTeam.splice(i, 1)
+			if (dist < ballRadius + targetRadius) {
+				simTargets.splice(i, 1)
 			}
 		}
 
-		if (simTeam.length === 0) {
+		if (simTargets.length === 0) {
 			return true
 		}
 	}
@@ -1142,54 +964,41 @@ function handleCollision() {
 	if (ball && (ball.isSpawningToStart || autoResetActive)) {
 		return
 	}
-	handleCollisionWithTeammate()
-	handleCollisionWithWall()
+	handleCollisionWithTarget()
 	handleCollisionWithObstacle()
 	handleCollisionWithEdge()
-	handleCollisionWithDoor()
-	// handleCollisionWithGoodJob() // Disabled - text is disabled
+	handleCollisionWithTrophy()
 }
 
-function handleCollisionWithTeammate() {
-	for (let i = 0; i < teamRemaining.length; i++) {
-		let teammate = teamRemaining[i]
-		let collisionDistance = getBallRadius() + getTeammateRadius()
-		let dx = ball.xPos - teammate.xPos
-		let dy = ball.yPos - teammate.yPos
+function handleCollisionWithTarget() {
+	for (let i = 0; i < targetsRemaining.length; i++) {
+		let target = targetsRemaining[i]
+		let collisionDistance = getBallRadius() + getTargetRadius()
+		let dx = ball.xPos - target.xPos
+		let dy = ball.yPos - target.yPos
 		let distance = Math.hypot(dx, dy)
 		if (distance < collisionDistance) {
 			let rewardPoints = Math.round(100 / Math.max(tries, 1))
-			let wasLastTeammate = teamRemaining.length === 1
-			let teammateX = teammate.xPos
-			let teammateY = teammate.yPos
-			teamRemaining.splice(i, 1)
+			let wasLastTarget = targetsRemaining.length === 1
+			let targetX = target.xPos
+			let targetY = target.yPos
+			targetsRemaining.splice(i, 1)
 			totalScore += rewardPoints
 			pointsThisLevel += rewardPoints
 			
-			// Create fireworks every time a teammate is collected
-			createFireworks(teammateX, teammateY)
+			// Create fireworks every time a target is collected
+			createFireworks(targetX, targetY)
 			
-			// Fade away obstacles when last teammate is collected
-			if (wasLastTeammate) {
-				// This shot successfully cleared all teammates
+			// Fade away obstacles when last target is collected
+			if (wasLastTarget) {
+				// This shot successfully cleared all targets
 				shotActive = false
 				
-				// Remember where the last teammate was collected so we can place the trophy there
-				lastTeammateX = teammateX
-				lastTeammateY = teammateY
-				// Determine message based on tries vs obstacles
-				let obstacleCount = obstacles.length
-				if (tries === 1) {
-					goodJobMessage = "GOOD JOB"
-				} else if (tries < obstacleCount - 1) {
-					goodJobMessage = "GOOD JOB"
-				} else if (tries >= obstacleCount - 1 && tries <= obstacleCount + 1) {
-					goodJobMessage = "OK JOB"
-				} else {
-					goodJobMessage = "BAD JOB"
-				}
+				// Remember where the last target was collected so we can place the trophy there
+				lastTargetX = targetX
+				lastTargetY = targetY
 				
-				// Start fading obstacles and create red fireworks after 1 second delay
+				// Start fading obstacles and create red fireworks after delay
 				setTimeout(() => {
 					for (let j = 0; j < obstacles.length; j++) {
 						let obstacle = obstacles[j]
@@ -1197,91 +1006,24 @@ function handleCollisionWithTeammate() {
 						obstacle.fadeOpacity = 1.0
 						obstacle.fading = true
 					}
-				}, 1000)
+				}, OBSTACLE_FADE_DELAY)
 				
-				// Show message after tutorial text explodes (3 seconds total: 2s for tutorial + 1s delay)
-				goodJobTimeout = setTimeout(() => {
-					showGoodJob = true
-					goodJobTimeout = null
-				}, 3000)
-				
-				// Explode tutorial text after 2 seconds (1s + 1s)
+				// Fade tutorial text after delay
 				tutorialExplosionTimeout = setTimeout(() => {
 					let tutorialOverlay = document.getElementById("tutorialOverlay")
-				if (tutorialOverlay && tutorialOverlay.style.visibility === "visible") {
-					// Hide and remove tutorial text (no fireworks)
+					if (tutorialOverlay && tutorialOverlay.style.visibility === "visible") {
 						tutorialOverlay.style.opacity = "0"
 					}
 					tutorialExplosionTimeout = null
-				}, 2000)
+				}, TUTORIAL_FADE_DELAY)
 				
-				// Place door after 2 seconds
+				// Place trophy after delay
 				setTimeout(() => {
-					placeDoor()
-				}, 2000)
+					placeTrophy()
+				}, TROPHY_PLACEMENT_DELAY)
 			}
 		}
 	}
-}
-
-function handleCollisionWithWall() {
-	walls.forEach(path => {
-		for (let i = 1; i < path.length; i++) {
-			let point1 = path[i - 1]
-			let point2 = path[i]
-			
-			// Check if ball is close to this line segment
-			if (isBallCloseToLineSegment(ball, getShim(), point1, point2)) {
-				// Calculate wall vector from point1 to point2
-				let wallVectorX = point2.xPos - point1.xPos
-				let wallVectorY = point2.yPos - point1.yPos
-				
-				// Calculate normal vector (perpendicular to wall, pointing away)
-				let normalVectorX = -wallVectorY
-				let normalVectorY = wallVectorX
-				
-				// Normalize normal vector
-				let length = Math.hypot(normalVectorX, normalVectorY)
-				if (length > 0) {
-					normalVectorX /= length
-					normalVectorY /= length
-					
-					// Reflect velocity off the wall
-					let dot = ball.xVel * normalVectorX + ball.yVel * normalVectorY
-					ball.xVel = ball.xVel - 2 * dot * normalVectorX
-					ball.yVel = ball.yVel - 2 * dot * normalVectorY
-				}
-			}
-		}
-	})
-}
-
-function isBallCloseToLineSegment(ball, radius, point1, point2) {
-	// Calculate distance from ball to line segment
-	let dx = point2.xPos - point1.xPos
-	let dy = point2.yPos - point1.yPos
-	let lengthSquared = dx * dx + dy * dy
-	
-	if (lengthSquared === 0) {
-		// Points are the same, just check distance to point
-		return isObjectCloseToObject(ball, radius, point1)
-	}
-	
-	// Calculate projection parameter
-	let t = Math.max(0, Math.min(1, 
-		((ball.xPos - point1.xPos) * dx + (ball.yPos - point1.yPos) * dy) / lengthSquared
-	))
-	
-	// Find closest point on line segment
-	let closestX = point1.xPos + t * dx
-	let closestY = point1.yPos + t * dy
-	
-	// Check distance from ball to closest point
-	let distX = ball.xPos - closestX
-	let distY = ball.yPos - closestY
-	let distance = Math.hypot(distX, distY)
-	
-	return distance < radius
 }
 
 function handleCollisionWithObstacle() {
@@ -1335,123 +1077,35 @@ function handleCollisionWithEdge() {
 	}
 }
 
-function handleCollisionWithDoor() {
-	if (!door) return
+function handleCollisionWithTrophy() {
+	if (!trophy) return
 	
 	let ballRadius = getBallRadius()
-	let dx = ball.xPos - door.xPos
-	let dy = ball.yPos - door.yPos
+	let dx = ball.xPos - trophy.xPos
+	let dy = ball.yPos - trophy.yPos
 	let distance = Math.hypot(dx, dy)
-	let collisionDistance = ballRadius + door.radius
+	let collisionDistance = ballRadius + trophy.radius
 	
 	if (distance < collisionDistance && distance > 0) {
 		// Ball hit the trophy - start animation toward the score indicator
 		// Prevent multiple collisions
-		if (door.animating) return
+		if (trophy.animating) return
 
 		// Compute the visual center of the completion score text, so the trophy flies
 		// directly into it (instead of the text's right-edge baseline).
-		let scoreTextX = canvas.width - 12
-		let scoreTextY = 56
-		let scoreCenterX = scoreTextX
-		let scoreCenterY = scoreTextY
-		ctx.save()
-		ctx.font = "bold 56px Arial"
-		ctx.textAlign = "right"
-		// Default textBaseline is "alphabetic", which is what drawCompletionScore uses.
-		let scoreMetrics = ctx.measureText(`${completionScore}`)
-		let scoreWidth = scoreMetrics.width || 0
-		let ascent = scoreMetrics.actualBoundingBoxAscent
-		let descent = scoreMetrics.actualBoundingBoxDescent
-		// Fallback if actualBoundingBox isn't supported
-		if (!Number.isFinite(ascent)) ascent = 56
-		if (!Number.isFinite(descent)) descent = 0
-		// Bounding box (textAlign = right, x is the right edge; y is alphabetic baseline)
-		let left = scoreTextX - scoreWidth
-		let right = scoreTextX
-		let top = scoreTextY - ascent
-		let bottom = scoreTextY + descent
-		scoreCenterX = (left + right) / 2
-		scoreCenterY = (top + bottom) / 2
-		ctx.restore()
+		let scoreCenter = getScoreCenter()
 		
 		// Start animation
-		door.animating = true
-		door.animationStartTime = Date.now()
-		door.startX = door.xPos
-		door.startY = door.yPos
-		door.targetX = scoreCenterX
-		door.targetY = scoreCenterY
-		door.animationDuration = 1000 // 1 second to reach corner
-		door.levelChanged = false // Track if level has been changed
-		door.offscreenAt = null
+		trophy.animating = true
+		trophy.animationStartTime = Date.now()
+		trophy.startX = trophy.xPos
+		trophy.startY = trophy.yPos
+		trophy.targetX = scoreCenter.x
+		trophy.targetY = scoreCenter.y
+		trophy.animationDuration = FADE_DURATION
+		trophy.levelChanged = false // Track if level has been changed
+		trophy.offscreenAt = null
 		pendingNextLevel = true
-	}
-}
-
-function handleCollisionWithGoodJob() {
-	if (!showGoodJob) return
-	
-	let ballRadius = getBallRadius()
-	
-	// Measure actual text dimensions using the same font settings as drawGoodJob
-	ctx.save()
-	ctx.font = "bold 64px Arial"
-	ctx.textAlign = "center"
-	ctx.textBaseline = "bottom"
-	let textMetrics = ctx.measureText(goodJobMessage)
-	let textWidth = textMetrics.width
-	let textHeight = textMetrics.actualBoundingBoxAscent + textMetrics.actualBoundingBoxDescent
-	if (textHeight === 0) {
-		// Fallback if actualBoundingBox not supported
-		textHeight = 64
-	}
-	let textX = canvas.width / 2
-	let textY = canvas.height // Bottom aligned (baseline position)
-	ctx.restore()
-	
-	// Rectangle bounds for the text (full width at bottom of screen)
-	let rectLeft = 0
-	let rectRight = canvas.width
-	let rectTop = textY - textHeight
-	let rectBottom = textY
-	
-	// Check if ball overlaps with rectangle
-	let ballLeft = ball.xPos - ballRadius
-	let ballRight = ball.xPos + ballRadius
-	let ballTop = ball.yPos - ballRadius
-	let ballBottom = ball.yPos + ballRadius
-	
-	if (ballRight > rectLeft && ballLeft < rectRight && ballBottom > rectTop && ballTop < rectBottom) {
-		// Find closest point on rectangle to ball
-		let closestX = Math.max(rectLeft, Math.min(ball.xPos, rectRight))
-		let closestY = Math.max(rectTop, Math.min(ball.yPos, rectBottom))
-		
-		// Calculate normal vector from closest point to ball center
-		let dx = ball.xPos - closestX
-		let dy = ball.yPos - closestY
-		let distance = Math.hypot(dx, dy)
-		
-		// Only process if ball is actually touching the rectangle
-		if (distance > 0 && distance <= ballRadius) {
-			// Normalize direction
-			let normalX = dx / distance
-			let normalY = dy / distance
-			
-			// Reflect velocity off the rectangle surface
-			let dot = ball.xVel * normalX + ball.yVel * normalY
-			ball.xVel = ball.xVel - 2 * dot * normalX
-			ball.yVel = ball.yVel - 2 * dot * normalY
-			
-			// Push ball outside rectangle to prevent sticking
-			let pushDistance = ballRadius + 1
-			ball.xPos = closestX + normalX * pushDistance
-			ball.yPos = closestY + normalY * pushDistance
-			
-			// Clamp to keep ball in bounds
-			ball.xPos = Math.max(ballRadius, Math.min(canvas.width - ballRadius, ball.xPos))
-			ball.yPos = Math.max(ballRadius, Math.min(canvas.height - ballRadius, ball.yPos))
-		}
 	}
 }
 
@@ -1460,7 +1114,7 @@ function draw() {
 	// For the very first level only, fade in the grey ball and score together.
 	if (initialIntroActive && !hasCompletedALevel) {
 		let elapsed = Date.now() - initialIntroStartTime
-		let fadeDuration = 1000 // 1 second fade-in
+		let fadeDuration = FADE_DURATION
 		let t = Math.min(1.0, Math.max(0.0, elapsed / fadeDuration))
 		ball.fadeOpacity = t
 		
@@ -1475,13 +1129,13 @@ function draw() {
 
 	drawBall()
 	
-	// Update fade-in for teammates
-	for (let i = 0; i < teamRemaining.length; i++) {
-		let teammate = teamRemaining[i]
-		if (teammate.fadeInOpacity !== undefined && teammate.fadeInOpacity < 1.0) {
-			let elapsed = Date.now() - teammate.fadeInStartTime
-			let fadeDuration = 1000 // 1.0 seconds to fade in (slower)
-			teammate.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
+	// Update fade-in for targets
+	for (let i = 0; i < targetsRemaining.length; i++) {
+		let target = targetsRemaining[i]
+		if (target.fadeInOpacity !== undefined && target.fadeInOpacity < 1.0) {
+			let elapsed = Date.now() - target.fadeInStartTime
+			let fadeDuration = FADE_DURATION
+			target.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
 		}
 	}
 	
@@ -1492,7 +1146,7 @@ function draw() {
 		// Handle fade-in
 		if (obstacle.fadeInOpacity !== undefined && obstacle.fadeInOpacity < 1.0) {
 			let elapsed = Date.now() - obstacle.fadeInStartTime
-			let fadeDuration = 1000 // 1.0 seconds to fade in (slower)
+			let fadeDuration = FADE_DURATION
 			obstacle.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
 		}
 		
@@ -1505,86 +1159,62 @@ function draw() {
 		}
 	}
 	
-	drawTeam()
+	drawTargets()
 	drawObstacles()
-	drawWalls()
-	
-	// Legacy intro prompt removed; HUD now only shows score/trophy/etc. here.
 	
 	// Update trophy fade-in
-	if (door && door.fadeInOpacity !== undefined && door.fadeInOpacity < 1.0) {
-		let elapsed = Date.now() - door.fadeInStartTime
+	if (trophy && trophy.fadeInOpacity !== undefined && trophy.fadeInOpacity < 1.0) {
+		let elapsed = Date.now() - trophy.fadeInStartTime
 		let fadeDuration = 1000 // 1.0 seconds to fade in (slower)
-		door.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
+		trophy.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
 	}
 	
 	// Update trophy animation if active
-	if (door && door.animating) {
+	if (trophy && trophy.animating) {
 		let currentTime = Date.now()
-		let elapsed = currentTime - door.animationStartTime
+		let elapsed = currentTime - trophy.animationStartTime
 		
-		if (elapsed <= door.animationDuration) {
+		if (elapsed <= trophy.animationDuration) {
 			// Interpolate to corner over exactly 1 second
-			let progress = elapsed / door.animationDuration
-			door.xPos = door.startX + (door.targetX - door.startX) * progress
-			door.yPos = door.startY + (door.targetY - door.startY) * progress
+			let progress = elapsed / trophy.animationDuration
+			trophy.xPos = trophy.startX + (trophy.targetX - trophy.startX) * progress
+			trophy.yPos = trophy.startY + (trophy.targetY - trophy.startY) * progress
 		} else {
 			// Continue moving past corner at same speed/direction
-			let dx = door.targetX - door.startX
-			let dy = door.targetY - door.startY
-			let speed = Math.hypot(dx, dy) / (door.animationDuration / 1000) // pixels per second
+			let dx = trophy.targetX - trophy.startX
+			let dy = trophy.targetY - trophy.startY
+			let speed = Math.hypot(dx, dy) / (trophy.animationDuration / 1000) // pixels per second
 			let angle = Math.atan2(dy, dx)
-			let extraTime = (elapsed - door.animationDuration) / 1000 // seconds past 1 second
+			let extraTime = (elapsed - trophy.animationDuration) / 1000 // seconds past 1 second
 			let extraDistance = speed * extraTime
 			
-			door.xPos = door.targetX + Math.cos(angle) * extraDistance
-			door.yPos = door.targetY + Math.sin(angle) * extraDistance
+			trophy.xPos = trophy.targetX + Math.cos(angle) * extraDistance
+			trophy.yPos = trophy.targetY + Math.sin(angle) * extraDistance
 		}
 		
 		// Check if trophy has reached the completion score text (visual center)
-		let scoreTextX = canvas.width - 12
-		let scoreTextY = 56
-		let scoreCenterX = scoreTextX
-		let scoreCenterY = scoreTextY
-		ctx.save()
-		ctx.font = "bold 56px Arial"
-		ctx.textAlign = "right"
-		// Default textBaseline is "alphabetic", which is what drawCompletionScore uses.
-		let scoreMetrics = ctx.measureText(`${completionScore}`)
-		let scoreWidth = scoreMetrics.width || 0
-		let ascent = scoreMetrics.actualBoundingBoxAscent
-		let descent = scoreMetrics.actualBoundingBoxDescent
-		if (!Number.isFinite(ascent)) ascent = 56
-		if (!Number.isFinite(descent)) descent = 0
-		let left = scoreTextX - scoreWidth
-		let right = scoreTextX
-		let top = scoreTextY - ascent
-		let bottom = scoreTextY + descent
-		scoreCenterX = (left + right) / 2
-		scoreCenterY = (top + bottom) / 2
-		ctx.restore()
-
-		let distanceToIndicator = Math.hypot(door.xPos - scoreCenterX, door.yPos - scoreCenterY)
+		let scoreCenter = getScoreCenter()
+		let distanceToIndicator = Math.hypot(trophy.xPos - scoreCenter.x, trophy.yPos - scoreCenter.y)
 		
-		if (distanceToIndicator < door.radius && !door.levelChanged) {
+		if (distanceToIndicator < trophy.radius && !trophy.levelChanged) {
 			// Trophy has contacted the score indicator:
 			//  - wait a short delay, then increment the score
  			//  - then change level (no grey-ball fade)
-			door.levelChanged = true
-			door.scoreIncrementTime = Date.now() + 200 // delay score increment by 0.2s
-			door.scoreIncremented = false
- 			door.nextLevelTime = Date.now() + 1000 // change level 1s after contact
+			trophy.levelChanged = true
+			trophy.scoreIncrementTime = Date.now() + 200 // delay score increment by 0.2s
+			trophy.scoreIncremented = false
+			trophy.nextLevelTime = Date.now() + FADE_DURATION // change level after delay
 		}
 
 		// Apply the delayed score increment once the delay has passed
-		if (door.levelChanged && !door.scoreIncremented && door.scoreIncrementTime && Date.now() >= door.scoreIncrementTime) {
+		if (trophy.levelChanged && !trophy.scoreIncremented && trophy.scoreIncrementTime && Date.now() >= trophy.scoreIncrementTime) {
 			completionScore++
-			door.scoreIncremented = true
+			trophy.scoreIncremented = true
 		}
  		
  		// Change level after the scheduled delay (no grey-ball fade)
- 		if (door.levelChanged && door.nextLevelTime && Date.now() >= door.nextLevelTime) {
-			door = null
+ 		if (trophy.levelChanged && trophy.nextLevelTime && Date.now() >= trophy.nextLevelTime) {
+			trophy = null
 			pendingNextLevel = false
 			// Mark that we've completed at least one level so future levels
 			// can animate the ball into its starting spot.
@@ -1600,17 +1230,15 @@ function draw() {
  		}
 		
 		// When trophy fully exits, just remove it (grey ball fade already in progress)
-		if (door.xPos < -door.radius * 2 && door.yPos < -door.radius * 2) {
-			door = null
+		if (trophy.xPos < -trophy.radius * 2 && trophy.yPos < -trophy.radius * 2) {
+			trophy = null
 		}
 	}
 	
 	// Draw the score first, then draw the trophy on top of it (z-order)
 	drawCompletionScore()
-	drawDoor()
+	drawTrophy()
 	drawFireworks()
-	// drawScore() // Disabled
-	// drawGoodJob() // Temporarily disabled
 }
 
 function createFireworks(x, y, color = "blue") {
@@ -1704,15 +1332,15 @@ function drawBall() {
 	ctx.restore()
 }
 
-function drawTeam() {
-	for (let i=0; i<teamRemaining.length; i++) {
-		let teammate = teamRemaining[i]
-		let radius = getTeammateRadius()
-		let x = teammate.xPos
-		let y = teammate.yPos
+function drawTargets() {
+	for (let i=0; i<targetsRemaining.length; i++) {
+		let target = targetsRemaining[i]
+		let radius = getTargetRadius()
+		let x = target.xPos
+		let y = target.yPos
 		
 		// Get opacity (fade-in or default to 1.0)
-		let opacity = teammate.fadeInOpacity !== undefined ? teammate.fadeInOpacity : 1.0
+		let opacity = target.fadeInOpacity !== undefined ? target.fadeInOpacity : 1.0
 		
 		ctx.save()
 		ctx.globalAlpha = opacity
@@ -1770,40 +1398,15 @@ function drawObstacles() {
 	}
 }
 
-function drawWalls() {
-	ctx.lineWidth = 20
-	ctx.strokeStyle = "purple"
-	walls.forEach(wallPath => {
-		if (wallPath.length < 2) {
-			return
-		}
-		ctx.beginPath()
-		ctx.moveTo(wallPath[0].xPos, wallPath[0].yPos)
-		wallPath.forEach(wallPoint => {
-			ctx.lineTo(wallPoint.xPos, wallPoint.yPos)
-		})
-		ctx.stroke()
-	})
-	// Draw the current wall being drawn
-	if (wall.length >= 2 && !ball.isBeingFlung) {
-		ctx.beginPath()
-		ctx.moveTo(wall[0].xPos, wall[0].yPos)
-		wall.forEach(wallPoint => {
-			ctx.lineTo(wallPoint.xPos, wallPoint.yPos)
-		})
-		ctx.stroke()
-	}
-}
-
-function drawDoor() {
-	if (!door) return
+function drawTrophy() {
+	if (!trophy) return
 	
-	let radius = door.radius
-	let x = door.xPos
-	let y = door.yPos
+	let radius = trophy.radius
+	let x = trophy.xPos
+	let y = trophy.yPos
 	
 	// Get opacity (fade-in or default to 1.0)
-	let opacity = door.fadeInOpacity !== undefined ? door.fadeInOpacity : 1.0
+	let opacity = trophy.fadeInOpacity !== undefined ? trophy.fadeInOpacity : 1.0
 	
 	ctx.save()
 	ctx.globalAlpha = opacity
@@ -1916,37 +1519,27 @@ function drawDoor() {
 	ctx.restore()
 }
 
-function drawScore() {
-	ctx.font = "bold 28px Arial"
-	let baseText = `Score: ${totalScore}`
-	
-	// Draw text outline for better visibility (match trophy outline color)
-	ctx.strokeStyle = "#b8860b"
-	ctx.lineWidth = 4
-	ctx.lineJoin = "round"
-	ctx.miterLimit = 2
-	
-	// Draw outline
-	ctx.strokeText(baseText, 12, 28)
-	
-	// Draw fill text (match trophy gold color)
-	ctx.fillStyle = "#ffd700"
-	ctx.fillText(baseText, 12, 28)
-}
-
-function getOrdinalSuffix(num) {
-	let j = num % 10
-	let k = num % 100
-	if (j === 1 && k !== 11) {
-		return num + "st"
+function getScoreCenter() {
+	let scoreTextX = canvas.width - 12
+	let scoreTextY = 56
+	ctx.save()
+	ctx.font = "bold 56px Arial"
+	ctx.textAlign = "right"
+	let scoreMetrics = ctx.measureText(`${completionScore}`)
+	let scoreWidth = scoreMetrics.width || 0
+	let ascent = scoreMetrics.actualBoundingBoxAscent
+	let descent = scoreMetrics.actualBoundingBoxDescent
+	if (!Number.isFinite(ascent)) ascent = 56
+	if (!Number.isFinite(descent)) descent = 0
+	let left = scoreTextX - scoreWidth
+	let right = scoreTextX
+	let top = scoreTextY - ascent
+	let bottom = scoreTextY + descent
+	ctx.restore()
+	return {
+		x: (left + right) / 2,
+		y: (top + bottom) / 2
 	}
-	if (j === 2 && k !== 12) {
-		return num + "nd"
-	}
-	if (j === 3 && k !== 13) {
-		return num + "rd"
-	}
-	return num + "th"
 }
 
 function drawCompletionScore() {
@@ -1968,7 +1561,7 @@ function drawCompletionScore() {
 	let scoreAlpha = 1.0
 	if (initialIntroActive && !hasCompletedALevel) {
 		let elapsed = Date.now() - initialIntroStartTime
-		let fadeDuration = 1000 // 1 second fade-in
+		let fadeDuration = FADE_DURATION
 		scoreAlpha = Math.min(1.0, Math.max(0.0, elapsed / fadeDuration))
 	}
 	
@@ -2010,49 +1603,15 @@ function drawCompletionScore() {
 		ctx.restore()
 		
 		// Update opacity and time (updated each frame)
-		const FADE_DURATION = 1.0 // seconds
+		const SCORE_INCREMENT_FADE_DURATION = 1.0 // seconds
 		scoreIncrementDisplay.timeLeft -= MS_PER_FRAME / 1000 // Convert ms to seconds
 		if (scoreIncrementDisplay.timeLeft <= 0) {
 			scoreIncrementDisplay = null
 		} else {
 			// Fade out over time (linear fade)
-			scoreIncrementDisplay.opacity = Math.max(0, scoreIncrementDisplay.timeLeft / FADE_DURATION)
+			scoreIncrementDisplay.opacity = Math.max(0, scoreIncrementDisplay.timeLeft / SCORE_INCREMENT_FADE_DURATION)
 		}
 	}
-}
-
-function drawGoodJob() {
-	if (!showGoodJob) return
-	
-	// Color halfway between ball grey (#b0b0b0) and white (#ffffff)
-	// Average: (#b0b0b0 + #ffffff) / 2 = #d8d8d8
-	let textColor = "#d8d8d8"
-	
-	ctx.font = "bold 64px Arial"
-	let text = goodJobMessage
-	
-	// Center text horizontally, align with bottom of viewport
-	let textX = canvas.width / 2
-	let textY = canvas.height // Aligned with bottom
-	
-	// Draw text outline for better visibility
-	ctx.strokeStyle = "black"
-	ctx.lineWidth = 6
-	ctx.lineJoin = "round"
-	ctx.miterLimit = 2
-	
-	// Draw outline
-	ctx.strokeText(text, textX, textY)
-	
-	// Draw fill text
-	ctx.fillStyle = textColor
-	ctx.textAlign = "center"
-	ctx.textBaseline = "bottom"
-	ctx.fillText(text, textX, textY)
-	
-	// Reset text alignment
-	ctx.textAlign = "left"
-	ctx.textBaseline = "alphabetic"
 }
 
 function updateTutorial() {
@@ -2133,14 +1692,6 @@ function isObjectCloseToObject(objectA, distance, objectB) {
     Math.abs(objectA.xPos - objectB.xPos) < distance && 
     Math.abs(objectA.yPos - objectB.yPos) < distance
   )
-}
-
-function getRandomX() {
-	return (canvas?.width || window.innerWidth) * Math.random()
-}
-
-function getRandomY() {
-	return (canvas?.height || window.innerHeight) * Math.random()
 }
 
 function resizeCanvas() {
