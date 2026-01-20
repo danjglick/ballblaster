@@ -31,12 +31,19 @@ let ball = {
 let targets = []
 let targetsRemaining = []
 let obstacles = []
+let star = null // White star that removes obstacles when hit (levels > 4, 20% chance)
+let switcher = null // White loop symbol that switches all red and blue balls when hit (levels > 4, 20% chance)
+let skull = null // White skull and crossbones that doubles obstacles when hit (levels > 4, 20% chance)
+let skullHitThisTry = false // Track if skull has been hit this try (idempotent)
 let trophy = null // Trophy that appears after collecting all targets
 let savedTargets = [] // Saved positions for retry
 let savedObstacles = [] // Saved positions for retry
 let savedBall = null // Saved ball position for retry
+let savedStar = null // Saved star position for retry
+let savedSwitcher = null // Saved switcher position for retry
+let savedSkull = null // Saved skull position for retry
 let isConvertingObstacle = false
-let selectedForConversion = null // { type: 'obstacle' | 'target', index: number }
+let selectedForConversion = null // { type: 'obstacle' | 'target' | 'star', index: number }
 let touch1 = {
 	xPos: 0,
 	yPos: 0
@@ -96,74 +103,6 @@ function initializeGame() {
 	document.addEventListener("touchstart", handleTouchstart)
 	document.addEventListener("touchmove", handleTouchmove, { passive: false })
 	document.addEventListener("touchend", handleTouchend)
-	let retryButton = document.getElementById("retryButton")
-	let nextButton = document.getElementById("nextButton")
-	
-	// Hide buttons
-	if (retryButton) {
-		retryButton.style.display = "none"
-	}
-	if (nextButton) {
-		nextButton.style.display = "none"
-	}
-	
-	let retryTouchStartTime = 0
-	let nextTouchStartTime = 0
-	
-	let handleRetry = (e) => {
-		e.preventDefault()
-		e.stopPropagation()
-		e.stopImmediatePropagation()
-		// If tries === 0, go to next level with one fewer target and obstacle
-		if (tries === 0) {
-			generateLevel(false, true) // false = not a normal retry, true = fewer sprites
-		} else {
-			generateLevel(true)
-		}
-		return false
-	}
-	
-	let handleNext = (e) => {
-		e.preventDefault()
-		e.stopPropagation()
-		e.stopImmediatePropagation()
-		generateLevel()
-		return false
-	}
-	
-	retryButton.addEventListener("touchstart", (e) => {
-		e.preventDefault()
-		e.stopPropagation()
-		retryTouchStartTime = Date.now()
-	}, { passive: false })
-	
-	retryButton.addEventListener("touchend", (e) => {
-		e.preventDefault()
-		e.stopPropagation()
-		// Only trigger if touch was quick (not a long press)
-		if (Date.now() - retryTouchStartTime < 500) {
-			handleRetry(e)
-		}
-	}, { passive: false })
-	
-	retryButton.addEventListener("click", handleRetry, { passive: false })
-	
-	nextButton.addEventListener("touchstart", (e) => {
-		e.preventDefault()
-		e.stopPropagation()
-		nextTouchStartTime = Date.now()
-	}, { passive: false })
-	
-	nextButton.addEventListener("touchend", (e) => {
-		e.preventDefault()
-		e.stopPropagation()
-		// Only trigger if touch was quick (not a long press)
-		if (Date.now() - nextTouchStartTime < 500) {
-			handleNext(e)
-		}
-	}, { passive: false })
-	
-	nextButton.addEventListener("click", handleNext, { passive: false })
 	document.addEventListener("wheel", (e) => e.preventDefault(), { passive: false })
 	// Prevent zoom gestures
 	document.addEventListener("gesturestart", (e) => e.preventDefault(), { passive: false })
@@ -202,10 +141,37 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 			placeObstacles()
 		}
 		placeBall()
+		// Reset star before potentially placing a new one
+		star = null
+		// Spawn star on level 5 and above with 20% chance
+		if (level >= 5 && Math.random() < 0.2) {
+			placeStar()
+		}
+		// Reset switcher before potentially placing a new one
+		switcher = null
+		// Spawn switcher on level 5 and above with 20% chance
+		if (level >= 5 && Math.random() < 0.2) {
+			placeSwitcher()
+		}
+		// Reset skull before potentially placing a new one
+		skull = null
+		// Spawn skull on level 5 and above with 20% chance
+		if (level >= 5 && Math.random() < 0.2) {
+			placeSkull()
+		}
 		// Save positions after placing (for future retries)
+		// Clear fade-in state from saved obstacles to prevent flashing on restore
+		let obstaclesToSave = JSON.parse(JSON.stringify(obstacles))
+		for (let i = 0; i < obstaclesToSave.length; i++) {
+			delete obstaclesToSave[i].fadeInOpacity
+			delete obstaclesToSave[i].fadeInStartTime
+		}
 		savedTargets = JSON.parse(JSON.stringify(targets))
-		savedObstacles = JSON.parse(JSON.stringify(obstacles))
+		savedObstacles = obstaclesToSave
 		savedBall = JSON.parse(JSON.stringify(ball))
+		savedStar = star ? JSON.parse(JSON.stringify(star)) : null
+		savedSwitcher = switcher ? JSON.parse(JSON.stringify(switcher)) : null
+		savedSkull = skull ? JSON.parse(JSON.stringify(skull)) : null
 	} else {
 		// Normal retry - restore obstacles and targets for current level
 		// Level stays the same, so tutorial stays the same
@@ -218,19 +184,52 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 			ball.xVel = 0
 			ball.yVel = 0
 			ball.isBeingFlung = false
+			// Reset fade-in for obstacles to prevent flashing
+			for (let i = 0; i < obstacles.length; i++) {
+				obstacles[i].fadeInOpacity = 0
+				obstacles[i].fadeInStartTime = Date.now()
+			}
 		} else {
 			// Generate new positions (first retry or no saved positions)
 			placeTargets()
 			placeObstacles()
 			placeBall()
+			// Reset star before potentially placing a new one
+			star = null
+			// Spawn star on level 5 and above with 20% chance
+			if (level >= 5 && Math.random() < 0.2) {
+				placeStar()
+			}
+			// Reset switcher before potentially placing a new one
+			switcher = null
+			// Spawn switcher on level 5 and above with 20% chance
+			if (level >= 5 && Math.random() < 0.2) {
+				placeSwitcher()
+			}
+			// Reset skull before potentially placing a new one
+			skull = null
+			// Spawn skull on level 5 and above with 20% chance
+			if (level >= 5 && Math.random() < 0.2) {
+				placeSkull()
+			}
 			// Save positions for future retries
+			// Clear fade-in state from saved obstacles to prevent flashing on restore
+			let obstaclesToSave = JSON.parse(JSON.stringify(obstacles))
+			for (let i = 0; i < obstaclesToSave.length; i++) {
+				delete obstaclesToSave[i].fadeInOpacity
+				delete obstaclesToSave[i].fadeInStartTime
+			}
 			savedTargets = JSON.parse(JSON.stringify(targets))
-			savedObstacles = JSON.parse(JSON.stringify(obstacles))
+			savedObstacles = obstaclesToSave
 			savedBall = JSON.parse(JSON.stringify(ball))
+			savedStar = star ? JSON.parse(JSON.stringify(star)) : null
+			savedSwitcher = switcher ? JSON.parse(JSON.stringify(switcher)) : null
+			savedSkull = skull ? JSON.parse(JSON.stringify(skull)) : null
 		}
 	}
 	targetsRemaining = JSON.parse(JSON.stringify(targets))
 	fireworks = []
+	// Don't reset star here - it's placed after obstacles/ball, so reset it before placement
 	trophy = null // Reset trophy for new level
 	pendingNextLevel = false
 	autoResetActive = false
@@ -277,6 +276,7 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 	levelScore = 0
 	pointsThisLevel = 0 // Reset points gained this level
 	tries = 0
+	skullHitThisTry = false // Reset skull hit flag for new try
 	// Initialize or clear tutorial for this level
 	if (level === 1 && !tutorialCompleted) {
 		// Level 1: full multi-step tutorial (fling, hit, switch)
@@ -293,6 +293,13 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 		gameLoopTimeout = null
 	}
 	// Draw immediately so UI (level indicator) doesn't "flash" during the 100ms restart delay
+	// Ensure all obstacles start at opacity 0 before drawing
+	for (let i = 0; i < obstacles.length; i++) {
+		if (obstacles[i].fadeInOpacity === undefined) {
+			obstacles[i].fadeInOpacity = 0
+			obstacles[i].fadeInStartTime = Date.now()
+		}
+	}
 	draw()
 	// Small delay to prevent zoom issues during level reload, then resume
 	setTimeout(() => {
@@ -333,11 +340,271 @@ function convertTargetAndObstacle(targetIndex, obstacleIndex) {
 	obstacles.push({
 		xPos: targetX,
 		yPos: targetY,
-		radius: targetRadius
+		radius: targetRadius,
+		fadeInOpacity: 0, // Start invisible for fade-in
+		fadeInStartTime: Date.now()
 	})
 	
 	selectedForConversion = null
 	isConvertingObstacle = true
+}
+
+function swapStarAndTarget(targetIndex) {
+	if (!star) return
+	
+	let starX = star.xPos
+	let starY = star.yPos
+	let target = targetsRemaining[targetIndex]
+	let targetX = target.xPos
+	let targetY = target.yPos
+	
+	// Find corresponding target in targets array and update both
+	let targetInTargets = targets.find(t => 
+		Math.abs(t.xPos - targetX) < 0.5 && Math.abs(t.yPos - targetY) < 0.5
+	)
+	
+	// Swap positions
+	star.xPos = targetX
+	star.yPos = targetY
+	target.xPos = starX
+	target.yPos = starY
+	if (targetInTargets) {
+		targetInTargets.xPos = starX
+		targetInTargets.yPos = starY
+	}
+	
+	selectedForConversion = null
+}
+
+function swapStarAndObstacle(obstacleIndex) {
+	if (!star) return
+	
+	let starX = star.xPos
+	let starY = star.yPos
+	let obstacle = obstacles[obstacleIndex]
+	let obstacleX = obstacle.xPos
+	let obstacleY = obstacle.yPos
+	
+	// Swap positions
+	star.xPos = obstacleX
+	star.yPos = obstacleY
+	obstacle.xPos = starX
+	obstacle.yPos = obstacleY
+	
+	selectedForConversion = null
+}
+
+function swapSkullAndTarget(targetIndex) {
+	if (!skull) return
+	
+	let skullX = skull.xPos
+	let skullY = skull.yPos
+	let target = targetsRemaining[targetIndex]
+	let targetX = target.xPos
+	let targetY = target.yPos
+	
+	// Find corresponding target in targets array and update both
+	let targetInTargets = targets.find(t => 
+		Math.abs(t.xPos - targetX) < 0.5 && Math.abs(t.yPos - targetY) < 0.5
+	)
+	
+	// Swap positions
+	skull.xPos = targetX
+	skull.yPos = targetY
+	target.xPos = skullX
+	target.yPos = skullY
+	if (targetInTargets) {
+		targetInTargets.xPos = skullX
+		targetInTargets.yPos = skullY
+	}
+	
+	selectedForConversion = null
+}
+
+function swapSkullAndObstacle(obstacleIndex) {
+	if (!skull) return
+	
+	let skullX = skull.xPos
+	let skullY = skull.yPos
+	let obstacle = obstacles[obstacleIndex]
+	let obstacleX = obstacle.xPos
+	let obstacleY = obstacle.yPos
+	
+	// Swap positions
+	skull.xPos = obstacleX
+	skull.yPos = obstacleY
+	obstacle.xPos = skullX
+	obstacle.yPos = obstacleY
+	
+	selectedForConversion = null
+}
+
+function swapStarAndSkull() {
+	if (!star || !skull) return
+	
+	let starX = star.xPos
+	let starY = star.yPos
+	let skullX = skull.xPos
+	let skullY = skull.yPos
+	
+	// Swap positions
+	star.xPos = skullX
+	star.yPos = skullY
+	skull.xPos = starX
+	skull.yPos = starY
+	
+	selectedForConversion = null
+}
+
+function swapStarAndSwitcher() {
+	if (!star || !switcher) return
+	
+	let starX = star.xPos
+	let starY = star.yPos
+	let switcherX = switcher.xPos
+	let switcherY = switcher.yPos
+	
+	// Swap positions
+	star.xPos = switcherX
+	star.yPos = switcherY
+	switcher.xPos = starX
+	switcher.yPos = starY
+	
+	selectedForConversion = null
+}
+
+function swapSkullAndSwitcher() {
+	if (!skull || !switcher) return
+	
+	let skullX = skull.xPos
+	let skullY = skull.yPos
+	let switcherX = switcher.xPos
+	let switcherY = switcher.yPos
+	
+	// Swap positions
+	skull.xPos = switcherX
+	skull.yPos = switcherY
+	switcher.xPos = skullX
+	switcher.yPos = skullY
+	
+	selectedForConversion = null
+}
+
+function swapBallAndTarget(targetIndex) {
+	let ballX = ball.xPos
+	let ballY = ball.yPos
+	let target = targetsRemaining[targetIndex]
+	let targetX = target.xPos
+	let targetY = target.yPos
+	
+	// Find corresponding target in targets array and update both
+	let targetInTargets = targets.find(t => 
+		Math.abs(t.xPos - targetX) < 0.5 && Math.abs(t.yPos - targetY) < 0.5
+	)
+	
+	// Swap positions
+	ball.xPos = targetX
+	ball.yPos = targetY
+	target.xPos = ballX
+	target.yPos = ballY
+	if (targetInTargets) {
+		targetInTargets.xPos = ballX
+		targetInTargets.yPos = ballY
+	}
+	
+	// Reset ball velocity when swapping
+	ball.xVel = 0
+	ball.yVel = 0
+	ball.isBeingFlung = false
+	
+	selectedForConversion = null
+}
+
+function swapBallAndObstacle(obstacleIndex) {
+	let ballX = ball.xPos
+	let ballY = ball.yPos
+	let obstacle = obstacles[obstacleIndex]
+	let obstacleX = obstacle.xPos
+	let obstacleY = obstacle.yPos
+	
+	// Swap positions
+	ball.xPos = obstacleX
+	ball.yPos = obstacleY
+	obstacle.xPos = ballX
+	obstacle.yPos = ballY
+	
+	// Reset ball velocity when swapping
+	ball.xVel = 0
+	ball.yVel = 0
+	ball.isBeingFlung = false
+	
+	selectedForConversion = null
+}
+
+function swapBallAndStar() {
+	if (!star) return
+	
+	let ballX = ball.xPos
+	let ballY = ball.yPos
+	let starX = star.xPos
+	let starY = star.yPos
+	
+	// Swap positions
+	ball.xPos = starX
+	ball.yPos = starY
+	star.xPos = ballX
+	star.yPos = ballY
+	
+	// Reset ball velocity when swapping
+	ball.xVel = 0
+	ball.yVel = 0
+	ball.isBeingFlung = false
+	
+	selectedForConversion = null
+}
+
+function swapBallAndSwitcher() {
+	if (!switcher) return
+	
+	let ballX = ball.xPos
+	let ballY = ball.yPos
+	let switcherX = switcher.xPos
+	let switcherY = switcher.yPos
+	
+	// Swap positions
+	ball.xPos = switcherX
+	ball.yPos = switcherY
+	switcher.xPos = ballX
+	switcher.yPos = ballY
+	
+	// Reset ball velocity when swapping
+	ball.xVel = 0
+	ball.yVel = 0
+	ball.isBeingFlung = false
+	
+	selectedForConversion = null
+}
+
+function swapBallAndSkull() {
+	if (!skull) return
+	
+	let ballX = ball.xPos
+	let ballY = ball.yPos
+	let skullX = skull.xPos
+	let skullY = skull.yPos
+	
+	// Swap positions
+	ball.xPos = skullX
+	ball.yPos = skullY
+	skull.xPos = ballX
+	skull.yPos = ballY
+	
+	// Reset ball velocity when swapping
+	ball.xVel = 0
+	ball.yVel = 0
+	ball.isBeingFlung = false
+	
+	selectedForConversion = null
 }
 
 function handleTouchstart(e) {
@@ -349,6 +616,34 @@ function handleTouchstart(e) {
 	}
 	isConvertingObstacle = false
 	
+	// TESTING: Clicking the score instantly advances to next level and increments score
+	ctx.save()
+	ctx.font = "bold 56px Arial"
+	ctx.textAlign = "right"
+	let scoreText = `${completionScore}`
+	let scoreMetrics = ctx.measureText(scoreText)
+	let scoreWidth = scoreMetrics.width || 0
+	let ascent = scoreMetrics.actualBoundingBoxAscent
+	let descent = scoreMetrics.actualBoundingBoxDescent
+	if (!Number.isFinite(ascent)) ascent = 56
+	if (!Number.isFinite(descent)) descent = 0
+	ctx.restore()
+	
+	let scoreTextX = canvas.width - 12
+	let scoreTextY = 56
+	let scoreLeft = scoreTextX - scoreWidth
+	let scoreRight = scoreTextX
+	let scoreTop = scoreTextY - ascent
+	let scoreBottom = scoreTextY + descent
+	
+	if (touch1.xPos >= scoreLeft && touch1.xPos <= scoreRight &&
+	    touch1.yPos >= scoreTop && touch1.yPos <= scoreBottom) {
+		// Clicked on score - instantly advance to next level
+		completionScore++
+		generateLevel()
+		return
+	}
+	
 	// While ball is animating to its new starting spot for the next level,
 	// or auto-resetting after a failed shot, ignore user input so they can't
 	// fling it mid-animation.
@@ -359,6 +654,104 @@ function handleTouchstart(e) {
 	let targetRadius = getTargetRadius()
 	let ballRadius = getBallRadius()
 	
+	// Check if tapping on a star (check before obstacles/targets to prioritize)
+	if (star) {
+		let starDistance = Math.hypot(touch1.xPos - star.xPos, touch1.yPos - star.yPos)
+		if (starDistance < star.radius + TOUCH_TOLERANCE) {
+			if (selectedForConversion && selectedForConversion.type === 'target') {
+				// Second tap: we have a target selected, now tapping star - swap positions
+				swapStarAndTarget(selectedForConversion.index)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'obstacle') {
+				// Second tap: we have an obstacle selected, now tapping star - swap positions
+				swapStarAndObstacle(selectedForConversion.index)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'skull') {
+				// Second tap: we have a skull selected, now tapping star - swap positions
+				swapStarAndSkull()
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'switcher') {
+				// Second tap: we have a switcher selected, now tapping star - swap positions
+				swapStarAndSwitcher()
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
+				// Second tap: we have a ball selected, now tapping star - swap positions
+				swapBallAndStar()
+				return
+			} else {
+				// First tap: select this star
+				selectedForConversion = { type: 'star', index: 0 }
+				return
+			}
+		}
+	}
+	
+	// Check if tapping on a skull (check before obstacles/targets to prioritize)
+	if (skull) {
+		let skullDistance = Math.hypot(touch1.xPos - skull.xPos, touch1.yPos - skull.yPos)
+		if (skullDistance < skull.radius + TOUCH_TOLERANCE) {
+			if (selectedForConversion && selectedForConversion.type === 'target') {
+				// Second tap: we have a target selected, now tapping skull - swap positions
+				swapSkullAndTarget(selectedForConversion.index)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'obstacle') {
+				// Second tap: we have an obstacle selected, now tapping skull - swap positions
+				swapSkullAndObstacle(selectedForConversion.index)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'star') {
+				// Second tap: we have a star selected, now tapping skull - swap positions
+				swapStarAndSkull()
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'switcher') {
+				// Second tap: we have a switcher selected, now tapping skull - swap positions
+				swapSkullAndSwitcher()
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
+				// Second tap: we have a ball selected, now tapping skull - swap positions
+				swapBallAndSkull()
+				return
+			} else {
+				// First tap: select this skull
+				selectedForConversion = { type: 'skull', index: 0 }
+				return
+			}
+		}
+	}
+	
+	// Check if tapping on a switcher (check before obstacles/targets to prioritize)
+	if (switcher) {
+		let switcherDistance = Math.hypot(touch1.xPos - switcher.xPos, touch1.yPos - switcher.yPos)
+		if (switcherDistance < switcher.radius + TOUCH_TOLERANCE) {
+			if (selectedForConversion && selectedForConversion.type === 'target') {
+				// Second tap: we have a target selected, now tapping switcher - swap positions
+				// Note: switcher doesn't swap with targets/obstacles, only with other items
+				selectedForConversion = { type: 'switcher', index: 0 }
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'obstacle') {
+				// Second tap: we have an obstacle selected, now tapping switcher - swap positions
+				// Note: switcher doesn't swap with targets/obstacles, only with other items
+				selectedForConversion = { type: 'switcher', index: 0 }
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'star') {
+				// Second tap: we have a star selected, now tapping switcher - swap positions
+				swapStarAndSwitcher()
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'skull') {
+				// Second tap: we have a skull selected, now tapping switcher - swap positions
+				swapSkullAndSwitcher()
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
+				// Second tap: we have a ball selected, now tapping switcher - swap positions
+				swapBallAndSwitcher()
+				return
+			} else {
+				// First tap: select this switcher
+				selectedForConversion = { type: 'switcher', index: 0 }
+				return
+			}
+		}
+	}
+	
 	// Check if tapping on an obstacle (check before ball to prioritize smaller targets)
 	for (let i = obstacles.length - 1; i >= 0; i--) {
 		let obstacle = obstacles[i]
@@ -367,6 +760,22 @@ function handleTouchstart(e) {
 			if (selectedForConversion && selectedForConversion.type === 'target') {
 				// Second tap: we have a target selected, now tapping obstacle - convert both
 				convertTargetAndObstacle(selectedForConversion.index, i)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'star') {
+				// Second tap: we have a star selected, now tapping obstacle - swap positions
+				swapStarAndObstacle(i)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'skull') {
+				// Second tap: we have a skull selected, now tapping obstacle - swap positions
+				swapSkullAndObstacle(i)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'switcher') {
+				// Second tap: we have a switcher selected, now tapping obstacle - no swap (switcher only swaps with items)
+				selectedForConversion = { type: 'obstacle', index: i }
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
+				// Second tap: we have a ball selected, now tapping obstacle - swap positions
+				swapBallAndObstacle(i)
 				return
 			} else {
 				// First tap: select this obstacle
@@ -391,6 +800,22 @@ function handleTouchstart(e) {
 				// Second tap: we have an obstacle selected, now tapping target - convert both
 				convertTargetAndObstacle(i, selectedForConversion.index)
 				return
+			} else if (selectedForConversion && selectedForConversion.type === 'star') {
+				// Second tap: we have a star selected, now tapping target - swap positions
+				swapStarAndTarget(i)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'skull') {
+				// Second tap: we have a skull selected, now tapping target - swap positions
+				swapSkullAndTarget(i)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'switcher') {
+				// Second tap: we have a switcher selected, now tapping target - no swap (switcher only swaps with items)
+				selectedForConversion = { type: 'target', index: i }
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
+				// Second tap: we have a ball selected, now tapping target - swap positions
+				swapBallAndTarget(i)
+				return
 			} else {
 				// First tap: select this target
 				selectedForConversion = { type: 'target', index: i }
@@ -414,28 +839,30 @@ function handleTouchstart(e) {
 			return
 		}
 
-		selectedForConversion = null // Clear selection if touching ball
-		ball.isBeingFlung = true
-		// Start a new "shot" – we care whether this single fling clears all targets.
-		shotActive = true
-		// Handle tutorial progression when the ball is flung.
-		// Level 1: multi-step tutorial (only advance 1 -> 2 here).
-		if (level === 1 && !tutorialCompleted && tutorialStep === 1) {
-			tutorialStep = 2
-			updateTutorial()
-		}
-		// Level 2: when the ball is flung for the first time on this level,
-		// show the final tutorial text. Subsequent flings on the same level
-		// won't re-show it after it has faded out.
-		if (level === 2 && tries === 0) {
-			let tutorialOverlay = document.getElementById("tutorialOverlay")
-			if (tutorialOverlay) {
-				tutorialOverlay.textContent = "Think carefully, aim true, and seize glory!"
-				tutorialOverlay.style.opacity = "1"
-				tutorialOverlay.style.visibility = "visible"
+		// Check if we have something selected to swap with
+		if (selectedForConversion) {
+			if (selectedForConversion.type === 'target') {
+				swapBallAndTarget(selectedForConversion.index)
+				return
+			} else if (selectedForConversion.type === 'obstacle') {
+				swapBallAndObstacle(selectedForConversion.index)
+				return
+			} else if (selectedForConversion.type === 'star') {
+				swapBallAndStar()
+				return
+			} else if (selectedForConversion.type === 'switcher') {
+				swapBallAndSwitcher()
+				return
+			} else if (selectedForConversion.type === 'skull') {
+				swapBallAndSkull()
+				return
 			}
 		}
-		tries++
+		
+		// If nothing selected, select the ball (but allow flinging on drag)
+		selectedForConversion = { type: 'ball', index: 0 }
+		ball.isBeingFlung = true
+		// Don't set shotActive here - only set it when user actually drags
 		return
 	}
 	
@@ -450,6 +877,30 @@ function handleTouchmove(e) {
 		yPos: e.touches[0].clientY 
 	}
 	if (ball.isBeingFlung) {
+		// Only start a shot when user actually drags (not just taps)
+		if (!shotActive) {
+			shotActive = true
+			// Reset skull hit flag when starting a new try
+			skullHitThisTry = false
+			// Handle tutorial progression when the ball is flung.
+			// Level 1: multi-step tutorial (only advance 1 -> 2 here).
+			if (level === 1 && !tutorialCompleted && tutorialStep === 1) {
+				tutorialStep = 2
+				updateTutorial()
+			}
+			// Level 2: when the ball is flung for the first time on this level,
+			// show the final tutorial text. Subsequent flings on the same level
+			// won't re-show it after it has faded out.
+			if (level === 2 && tries === 0) {
+				let tutorialOverlay = document.getElementById("tutorialOverlay")
+				if (tutorialOverlay) {
+					tutorialOverlay.textContent = "Think carefully, aim true, and seize glory!"
+					tutorialOverlay.style.opacity = "1"
+					tutorialOverlay.style.visibility = "visible"
+				}
+			}
+			tries++
+		}
 		ball.xVel = (touch2.xPos - touch1.xPos) / FLING_DIVISOR
 		ball.yVel = (touch2.yPos - touch1.yPos) / FLING_DIVISOR
 	}
@@ -667,7 +1118,8 @@ function placeObstaclesWithCount(obstacleCount) {
 			yPos: yPos,
 			radius: obstacleRadius,
 			fadeInOpacity: 0, // Start invisible for fade-in
-			fadeInStartTime: Date.now()
+			fadeInStartTime: Date.now(),
+			_fadeInInitialized: true // Flag to ensure fade-in is properly initialized
 		})
 	}
 }
@@ -783,8 +1235,8 @@ function placeTrophy() {
 }
 
 function placeTargets() {
-	// Always use 5 targets on every level (including level 1).
-	let targetCount = 5
+	// Level 1: 3 targets, later levels: 5 targets.
+	let targetCount = (level === 1) ? 3 : 5
 	placeTargetsWithCount(targetCount)
 }
 
@@ -793,6 +1245,315 @@ function placeObstacles() {
 	// Level 1: 3 obstacles, later levels: 5 obstacles.
 	let obstacleCount = (level === 1) ? 3 : 5
 	placeObstaclesWithCount(obstacleCount)
+}
+
+function placeStar() {
+	let starRadius = getBallRadius() // Same size as ball
+	let ballRadius = getBallRadius()
+	let targetRadius = getTargetRadius()
+	let minSeparation = 5
+	let maxAttempts = 100
+	// No exclusion zone - score and buttons are disabled
+	let topExclusionZone = 0
+	// Keep star away from the very bottom: never within 4 grey-ball
+	// diameters of the bottom edge.
+	let bottomExclusion = 8 * ballRadius // 4 * (2 * ballRadius)
+	let attempts = 0
+	let xPos, yPos
+	let validPosition = false
+	
+	while (!validPosition && attempts < maxAttempts) {
+		// Ensure star is fully within canvas bounds, and not too close
+		// to the bottom edge.
+		xPos = starRadius + (canvas.width - 2 * starRadius) * Math.random()
+		// Exclude top area unless high level, and also exclude a band
+		// near the bottom based on grey ball size.
+		let minY = starRadius + topExclusionZone
+		let maxY = canvas.height - Math.max(starRadius, bottomExclusion)
+		yPos = minY + (maxY - minY) * Math.random()
+		validPosition = true
+		
+		// Check distance from ball
+		let dx = xPos - ball.xPos
+		let dy = yPos - ball.yPos
+		let distance = Math.hypot(dx, dy)
+		let minDistance = starRadius + ballRadius + minSeparation
+		if (distance < minDistance) {
+			validPosition = false
+		}
+		
+		// Check distance from targets
+		if (validPosition) {
+			for (let j = 0; j < targets.length; j++) {
+				let dx2 = xPos - targets[j].xPos
+				let dy2 = yPos - targets[j].yPos
+				let distance2 = Math.hypot(dx2, dy2)
+				let minDistance2 = starRadius + targetRadius + minSeparation
+				if (distance2 < minDistance2) {
+					validPosition = false
+					break
+				}
+			}
+		}
+		
+		// Check distance from obstacles
+		if (validPosition) {
+			for (let j = 0; j < obstacles.length; j++) {
+				let dx3 = xPos - obstacles[j].xPos
+				let dy3 = yPos - obstacles[j].yPos
+				let distance3 = Math.hypot(dx3, dy3)
+				let minDistance3 = starRadius + obstacles[j].radius + minSeparation
+				if (distance3 < minDistance3) {
+					validPosition = false
+					break
+				}
+			}
+		}
+		
+		// Check distance from switcher if it exists
+		if (validPosition && switcher) {
+			let dx4 = xPos - switcher.xPos
+			let dy4 = yPos - switcher.yPos
+			let distance4 = Math.hypot(dx4, dy4)
+			let minDistance4 = starRadius + switcher.radius + minSeparation
+			if (distance4 < minDistance4) {
+				validPosition = false
+			}
+		}
+		
+		// Check distance from skull if it exists
+		if (validPosition && skull) {
+			let dx5 = xPos - skull.xPos
+			let dy5 = yPos - skull.yPos
+			let distance5 = Math.hypot(dx5, dy5)
+			let minDistance5 = starRadius + skull.radius + minSeparation
+			if (distance5 < minDistance5) {
+				validPosition = false
+			}
+		}
+		
+		attempts++
+	}
+	
+	// Fallback: ensure position is valid even if loop exhausted attempts
+	if (!validPosition) {
+		xPos = starRadius + (canvas.width - 2 * starRadius) * Math.random()
+		let minY = starRadius + topExclusionZone
+		let maxY = canvas.height - Math.max(starRadius, bottomExclusion)
+		yPos = minY + (maxY - minY) * Math.random()
+	}
+	
+	star = {
+		xPos: xPos,
+		yPos: yPos,
+		radius: starRadius
+	}
+}
+
+function placeSwitcher() {
+	let switcherRadius = getBallRadius() // Same size as ball
+	let ballRadius = getBallRadius()
+	let targetRadius = getTargetRadius()
+	let minSeparation = 5
+	let maxAttempts = 100
+	// No exclusion zone - score and buttons are disabled
+	let topExclusionZone = 0
+	// Keep switcher away from the very bottom: never within 4 grey-ball
+	// diameters of the bottom edge.
+	let bottomExclusion = 8 * ballRadius // 4 * (2 * ballRadius)
+	let attempts = 0
+	let xPos, yPos
+	let validPosition = false
+	
+	while (!validPosition && attempts < maxAttempts) {
+		// Ensure switcher is fully within canvas bounds, and not too close
+		// to the bottom edge.
+		xPos = switcherRadius + (canvas.width - 2 * switcherRadius) * Math.random()
+		// Exclude top area unless high level, and also exclude a band
+		// near the bottom based on grey ball size.
+		let minY = switcherRadius + topExclusionZone
+		let maxY = canvas.height - Math.max(switcherRadius, bottomExclusion)
+		yPos = minY + (maxY - minY) * Math.random()
+		validPosition = true
+		
+		// Check distance from ball
+		let dx = xPos - ball.xPos
+		let dy = yPos - ball.yPos
+		let distance = Math.hypot(dx, dy)
+		let minDistance = switcherRadius + ballRadius + minSeparation
+		if (distance < minDistance) {
+			validPosition = false
+		}
+		
+		// Check distance from targets
+		if (validPosition) {
+			for (let j = 0; j < targets.length; j++) {
+				let dx2 = xPos - targets[j].xPos
+				let dy2 = yPos - targets[j].yPos
+				let distance2 = Math.hypot(dx2, dy2)
+				let minDistance2 = switcherRadius + targetRadius + minSeparation
+				if (distance2 < minDistance2) {
+					validPosition = false
+					break
+				}
+			}
+		}
+		
+		// Check distance from obstacles
+		if (validPosition) {
+			for (let j = 0; j < obstacles.length; j++) {
+				let dx3 = xPos - obstacles[j].xPos
+				let dy3 = yPos - obstacles[j].yPos
+				let distance3 = Math.hypot(dx3, dy3)
+				let minDistance3 = switcherRadius + obstacles[j].radius + minSeparation
+				if (distance3 < minDistance3) {
+					validPosition = false
+					break
+				}
+			}
+		}
+		
+		// Check distance from star if it exists
+		if (validPosition && star) {
+			let dx4 = xPos - star.xPos
+			let dy4 = yPos - star.yPos
+			let distance4 = Math.hypot(dx4, dy4)
+			let minDistance4 = switcherRadius + star.radius + minSeparation
+			if (distance4 < minDistance4) {
+				validPosition = false
+			}
+		}
+		
+		// Check distance from skull if it exists
+		if (validPosition && skull) {
+			let dx5 = xPos - skull.xPos
+			let dy5 = yPos - skull.yPos
+			let distance5 = Math.hypot(dx5, dy5)
+			let minDistance5 = switcherRadius + skull.radius + minSeparation
+			if (distance5 < minDistance5) {
+				validPosition = false
+			}
+		}
+		
+		attempts++
+	}
+	
+	// Fallback: ensure position is valid even if loop exhausted attempts
+	if (!validPosition) {
+		xPos = switcherRadius + (canvas.width - 2 * switcherRadius) * Math.random()
+		let minY = switcherRadius + topExclusionZone
+		let maxY = canvas.height - Math.max(switcherRadius, bottomExclusion)
+		yPos = minY + (maxY - minY) * Math.random()
+	}
+	
+	switcher = {
+		xPos: xPos,
+		yPos: yPos,
+		radius: switcherRadius
+	}
+}
+
+function placeSkull() {
+	let skullRadius = getBallRadius() // Same size as ball
+	let ballRadius = getBallRadius()
+	let targetRadius = getTargetRadius()
+	let minSeparation = 5
+	let maxAttempts = 100
+	// No exclusion zone - score and buttons are disabled
+	let topExclusionZone = 0
+	// Keep skull away from the very bottom: never within 4 grey-ball
+	// diameters of the bottom edge.
+	let bottomExclusion = 8 * ballRadius // 4 * (2 * ballRadius)
+	let attempts = 0
+	let xPos, yPos
+	let validPosition = false
+	
+	while (!validPosition && attempts < maxAttempts) {
+		// Ensure skull is fully within canvas bounds, and not too close
+		// to the bottom edge.
+		xPos = skullRadius + (canvas.width - 2 * skullRadius) * Math.random()
+		// Exclude top area unless high level, and also exclude a band
+		// near the bottom based on grey ball size.
+		let minY = skullRadius + topExclusionZone
+		let maxY = canvas.height - Math.max(skullRadius, bottomExclusion)
+		yPos = minY + (maxY - minY) * Math.random()
+		validPosition = true
+		
+		// Check distance from ball
+		let dx = xPos - ball.xPos
+		let dy = yPos - ball.yPos
+		let distance = Math.hypot(dx, dy)
+		let minDistance = skullRadius + ballRadius + minSeparation
+		if (distance < minDistance) {
+			validPosition = false
+		}
+		
+		// Check distance from targets
+		if (validPosition) {
+			for (let j = 0; j < targets.length; j++) {
+				let dx2 = xPos - targets[j].xPos
+				let dy2 = yPos - targets[j].yPos
+				let distance2 = Math.hypot(dx2, dy2)
+				let minDistance2 = skullRadius + targetRadius + minSeparation
+				if (distance2 < minDistance2) {
+					validPosition = false
+					break
+				}
+			}
+		}
+		
+		// Check distance from obstacles
+		if (validPosition) {
+			for (let j = 0; j < obstacles.length; j++) {
+				let dx3 = xPos - obstacles[j].xPos
+				let dy3 = yPos - obstacles[j].yPos
+				let distance3 = Math.hypot(dx3, dy3)
+				let minDistance3 = skullRadius + obstacles[j].radius + minSeparation
+				if (distance3 < minDistance3) {
+					validPosition = false
+					break
+				}
+			}
+		}
+		
+		// Check distance from star if it exists
+		if (validPosition && star) {
+			let dx4 = xPos - star.xPos
+			let dy4 = yPos - star.yPos
+			let distance4 = Math.hypot(dx4, dy4)
+			let minDistance4 = skullRadius + star.radius + minSeparation
+			if (distance4 < minDistance4) {
+				validPosition = false
+			}
+		}
+		
+		// Check distance from switcher if it exists
+		if (validPosition && switcher) {
+			let dx5 = xPos - switcher.xPos
+			let dy5 = yPos - switcher.yPos
+			let distance5 = Math.hypot(dx5, dy5)
+			let minDistance5 = skullRadius + switcher.radius + minSeparation
+			if (distance5 < minDistance5) {
+				validPosition = false
+			}
+		}
+		
+		attempts++
+	}
+	
+	// Fallback: ensure position is valid even if loop exhausted attempts
+	if (!validPosition) {
+		xPos = skullRadius + (canvas.width - 2 * skullRadius) * Math.random()
+		let minY = skullRadius + topExclusionZone
+		let maxY = canvas.height - Math.max(skullRadius, bottomExclusion)
+		yPos = minY + (maxY - minY) * Math.random()
+	}
+	
+	skull = {
+		xPos: xPos,
+		yPos: yPos,
+		radius: skullRadius
+	}
 }
 
 function moveBall() {
@@ -906,6 +1667,41 @@ function moveBall() {
 				}
 				targetsRemaining = newTargetsRemaining
 			}
+			
+			// Restore obstacles from savedObstacles (in case they were doubled by skull)
+			// This ensures doubled obstacles only last for the duration of that try
+			if (savedObstacles && savedObstacles.length > 0) {
+				obstacles = JSON.parse(JSON.stringify(savedObstacles))
+				// Add fade-in to restored obstacles
+				for (let i = 0; i < obstacles.length; i++) {
+					obstacles[i].fadeInOpacity = 0
+					obstacles[i].fadeInStartTime = autoResetStartTime
+				}
+			}
+			
+			// Restore sprites (star, switcher, skull) with fade-in
+			if (savedStar) {
+				star = JSON.parse(JSON.stringify(savedStar))
+				star.fadeInOpacity = 0
+				star.fadeInStartTime = autoResetStartTime
+			} else {
+				star = null
+			}
+			if (savedSwitcher) {
+				switcher = JSON.parse(JSON.stringify(savedSwitcher))
+				switcher.fadeInOpacity = 0
+				switcher.fadeInStartTime = autoResetStartTime
+			} else {
+				switcher = null
+			}
+			if (savedSkull) {
+				skull = JSON.parse(JSON.stringify(savedSkull))
+				skull.fadeInOpacity = 0
+				skull.fadeInStartTime = autoResetStartTime
+			} else {
+				skull = null
+			}
+			
 			return
 		}
 	}
@@ -967,6 +1763,9 @@ function handleCollision() {
 	handleCollisionWithTarget()
 	handleCollisionWithObstacle()
 	handleCollisionWithEdge()
+	handleCollisionWithStar()
+	handleCollisionWithSwitcher()
+	handleCollisionWithSkull()
 	handleCollisionWithTrophy()
 }
 
@@ -1008,11 +1807,17 @@ function handleCollisionWithTarget() {
 					}
 				}, OBSTACLE_FADE_DELAY)
 				
-				// Fade tutorial text after delay
+				// Fade tutorial text after delay (but skip step 2 and level 2 tutorial - they fade after trophy)
 				tutorialExplosionTimeout = setTimeout(() => {
 					let tutorialOverlay = document.getElementById("tutorialOverlay")
 					if (tutorialOverlay && tutorialOverlay.style.visibility === "visible") {
-						tutorialOverlay.style.opacity = "0"
+						let tutorialText = tutorialOverlay.textContent
+						// Don't fade step 2 here - it stays until next level appears
+						// Don't fade level 2 tutorial here - it stays until next level appears
+						if (tutorialText !== "Hit all the blue balls to win" && 
+						    tutorialText !== "Think carefully, aim true, and seize glory!") {
+							tutorialOverlay.style.opacity = "0"
+						}
 					}
 					tutorialExplosionTimeout = null
 				}, TUTORIAL_FADE_DELAY)
@@ -1020,6 +1825,7 @@ function handleCollisionWithTarget() {
 				// Place trophy after delay
 				setTimeout(() => {
 					placeTrophy()
+					// Tutorial step 2 and level 2 tutorial both stay until next level appears
 				}, TROPHY_PLACEMENT_DELAY)
 			}
 		}
@@ -1074,6 +1880,241 @@ function handleCollisionWithEdge() {
 	} else if (ball.xPos + radius >= canvas.width) {
 		ball.xPos = canvas.width - radius
 		ball.xVel = -ball.xVel
+	}
+}
+
+function handleCollisionWithStar() {
+	if (!star) return
+	
+	let ballRadius = getBallRadius()
+	let dx = ball.xPos - star.xPos
+	let dy = ball.yPos - star.yPos
+	let distance = Math.hypot(dx, dy)
+	let collisionDistance = ballRadius + star.radius
+	
+	if (distance < collisionDistance && distance > 0) {
+		// Save star position before removing it
+		let starX = star.xPos
+		let starY = star.yPos
+		
+		// Ball hit the star - remove the 3 obstacles closest to the star
+		if (obstacles.length > 0) {
+			// Calculate distances from star to all obstacles
+			let obstaclesWithDistances = obstacles.map((obstacle, index) => {
+				let dx = star.xPos - obstacle.xPos
+				let dy = star.yPos - obstacle.yPos
+				let dist = Math.hypot(dx, dy)
+				return { obstacle, index, distance: dist }
+			})
+			
+			// Sort by distance (closest first)
+			obstaclesWithDistances.sort((a, b) => a.distance - b.distance)
+			
+			// Remove the 3 closest obstacles (or all if fewer than 3)
+			let removeCount = Math.min(3, obstaclesWithDistances.length)
+			let indicesToRemove = obstaclesWithDistances.slice(0, removeCount).map(item => item.index)
+			
+			// Sort indices in descending order to remove from end to start (avoids index shifting issues)
+			indicesToRemove.sort((a, b) => b - a)
+			for (let idx of indicesToRemove) {
+				obstacles.splice(idx, 1)
+			}
+		}
+		
+		// Remove the star
+		star = null
+		
+		// Update saved obstacles so auto-reset works correctly
+		let obstaclesToSave = JSON.parse(JSON.stringify(obstacles))
+		for (let i = 0; i < obstaclesToSave.length; i++) {
+			delete obstaclesToSave[i].fadeInOpacity
+			delete obstaclesToSave[i].fadeInStartTime
+		}
+		savedObstacles = obstaclesToSave
+	}
+}
+
+function handleCollisionWithSwitcher() {
+	if (!switcher) return
+	
+	let ballRadius = getBallRadius()
+	let dx = ball.xPos - switcher.xPos
+	let dy = ball.yPos - switcher.yPos
+	let distance = Math.hypot(dx, dy)
+	let collisionDistance = ballRadius + switcher.radius
+	
+	if (distance < collisionDistance && distance > 0) {
+		// Ball hit the switcher - switch all red and blue balls
+		// Save all positions
+		let targetPositions = targets.map(t => ({ xPos: t.xPos, yPos: t.yPos }))
+		let obstaclePositions = obstacles.map(o => ({ xPos: o.xPos, yPos: o.yPos }))
+		
+		// Switch positions: targets get obstacle positions, obstacles get target positions
+		// Handle cases where counts might differ
+		let minCount = Math.min(targets.length, obstacles.length)
+		for (let i = 0; i < minCount; i++) {
+			targets[i].xPos = obstaclePositions[i].xPos
+			targets[i].yPos = obstaclePositions[i].yPos
+			obstacles[i].xPos = targetPositions[i].xPos
+			obstacles[i].yPos = targetPositions[i].yPos
+		}
+		
+		// If there are more targets than obstacles, remaining targets keep their positions
+		// If there are more obstacles than targets, remaining obstacles keep their positions
+		
+		// Update targetsRemaining to match targets
+		targetsRemaining = JSON.parse(JSON.stringify(targets))
+		
+		// Update saved targets and obstacles so auto-reset works correctly
+		savedTargets = JSON.parse(JSON.stringify(targets))
+		let obstaclesToSave = JSON.parse(JSON.stringify(obstacles))
+		for (let i = 0; i < obstaclesToSave.length; i++) {
+			delete obstaclesToSave[i].fadeInOpacity
+			delete obstaclesToSave[i].fadeInStartTime
+		}
+		savedObstacles = obstaclesToSave
+		
+		// Remove the switcher
+		switcher = null
+	}
+}
+
+function handleCollisionWithSkull() {
+	if (!skull || skullHitThisTry) return // Idempotent: only work once per try
+	
+	let ballRadius = getBallRadius()
+	let dx = ball.xPos - skull.xPos
+	let dy = ball.yPos - skull.yPos
+	let distance = Math.hypot(dx, dy)
+	let collisionDistance = ballRadius + skull.radius
+	
+	if (distance < collisionDistance && distance > 0) {
+		// Ball hit the skull - double the number of obstacles (idempotent)
+		skullHitThisTry = true
+		
+		// Save current obstacle count
+		let currentObstacleCount = obstacles.length
+		
+		// Add new obstacles equal to current count
+		let obstacleRadius = getTargetRadius()
+		let ballRadius = getBallRadius()
+		let targetRadius = getTargetRadius()
+		let minSeparation = 5
+		let topExclusionZone = 0
+		let bottomExclusion = 8 * ballRadius
+		
+		for (let i = 0; i < currentObstacleCount; i++) {
+			let attempts = 0
+			let xPos, yPos
+			let validPosition = false
+			
+			while (!validPosition && attempts < 100) {
+				xPos = obstacleRadius + (canvas.width - 2 * obstacleRadius) * Math.random()
+				let minY = obstacleRadius + topExclusionZone
+				let maxY = canvas.height - Math.max(obstacleRadius, bottomExclusion)
+				yPos = minY + (maxY - minY) * Math.random()
+				validPosition = true
+				
+				// Check distance from ball
+				let dx = xPos - ball.xPos
+				let dy = yPos - ball.yPos
+				let dist = Math.hypot(dx, dy)
+				let minDist = obstacleRadius + ballRadius + minSeparation
+				if (dist < minDist) {
+					validPosition = false
+				}
+				
+				// Check distance from targets
+				if (validPosition) {
+					for (let j = 0; j < targets.length; j++) {
+						let dx2 = xPos - targets[j].xPos
+						let dy2 = yPos - targets[j].yPos
+						let dist2 = Math.hypot(dx2, dy2)
+						let minDist2 = obstacleRadius + targetRadius + minSeparation
+						if (dist2 < minDist2) {
+							validPosition = false
+							break
+						}
+					}
+				}
+				
+				// Check distance from existing obstacles
+				if (validPosition) {
+					for (let j = 0; j < obstacles.length; j++) {
+						let dx3 = xPos - obstacles[j].xPos
+						let dy3 = yPos - obstacles[j].yPos
+						let dist3 = Math.hypot(dx3, dy3)
+						let minDist3 = obstacleRadius + obstacles[j].radius + minSeparation
+						if (dist3 < minDist3) {
+							validPosition = false
+							break
+						}
+					}
+				}
+				
+				// Check distance from skull
+				if (validPosition && skull) {
+					let dx4 = xPos - skull.xPos
+					let dy4 = yPos - skull.yPos
+					let dist4 = Math.hypot(dx4, dy4)
+					let minDist4 = obstacleRadius + skull.radius + minSeparation
+					if (dist4 < minDist4) {
+						validPosition = false
+					}
+				}
+				
+				// Check distance from star if it exists
+				if (validPosition && star) {
+					let dx5 = xPos - star.xPos
+					let dy5 = yPos - star.yPos
+					let dist5 = Math.hypot(dx5, dy5)
+					let minDist5 = obstacleRadius + star.radius + minSeparation
+					if (dist5 < minDist5) {
+						validPosition = false
+					}
+				}
+				
+				// Check distance from switcher if it exists
+				if (validPosition && switcher) {
+					let dx6 = xPos - switcher.xPos
+					let dy6 = yPos - switcher.yPos
+					let dist6 = Math.hypot(dx6, dy6)
+					let minDist6 = obstacleRadius + switcher.radius + minSeparation
+					if (dist6 < minDist6) {
+						validPosition = false
+					}
+				}
+				
+				attempts++
+			}
+			
+			// Fallback: ensure position is valid even if loop exhausted attempts
+			if (!validPosition) {
+				xPos = obstacleRadius + (canvas.width - 2 * obstacleRadius) * Math.random()
+				let minY = obstacleRadius + topExclusionZone
+				let maxY = canvas.height - Math.max(obstacleRadius, bottomExclusion)
+				yPos = minY + (maxY - minY) * Math.random()
+			}
+			
+			obstacles.push({
+				xPos: xPos,
+				yPos: yPos,
+				radius: obstacleRadius,
+				fadeInOpacity: 0,
+				fadeInStartTime: Date.now()
+			})
+		}
+		
+		// Update saved obstacles so auto-reset works correctly
+		let obstaclesToSave = JSON.parse(JSON.stringify(obstacles))
+		for (let i = 0; i < obstaclesToSave.length; i++) {
+			delete obstaclesToSave[i].fadeInOpacity
+			delete obstaclesToSave[i].fadeInStartTime
+		}
+		savedObstacles = obstaclesToSave
+		
+		// Remove the skull
+		skull = null
 	}
 }
 
@@ -1143,8 +2184,15 @@ function draw() {
 	for (let i = obstacles.length - 1; i >= 0; i--) {
 		let obstacle = obstacles[i]
 		
-		// Handle fade-in
-		if (obstacle.fadeInOpacity !== undefined && obstacle.fadeInOpacity < 1.0) {
+		// CRITICAL: Always initialize fade-in if missing - this prevents flashing
+		if (obstacle.fadeInOpacity === undefined || obstacle.fadeInStartTime === undefined) {
+			obstacle.fadeInOpacity = 0
+			obstacle.fadeInStartTime = Date.now()
+		}
+		
+		// Handle fade-in - always update if fadeInOpacity is less than 1.0
+		// This ensures obstacles gradually fade in from 0 to 1.0
+		if (obstacle.fadeInOpacity < 1.0) {
 			let elapsed = Date.now() - obstacle.fadeInStartTime
 			let fadeDuration = FADE_DURATION
 			obstacle.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
@@ -1161,6 +2209,9 @@ function draw() {
 	
 	drawTargets()
 	drawObstacles()
+	drawStar()
+	drawSwitcher()
+	drawSkull()
 	
 	// Update trophy fade-in
 	if (trophy && trophy.fadeInOpacity !== undefined && trophy.fadeInOpacity < 1.0) {
@@ -1369,13 +2420,24 @@ function drawObstacles() {
 		let x = obstacle.xPos
 		let y = obstacle.yPos
 		
-		// Get opacity (fade-in takes priority, then fade-out, then default to 1.0)
-		let opacity = 1.0
-		if (obstacle.fadeInOpacity !== undefined) {
-			opacity = obstacle.fadeInOpacity
+		// Get opacity (fade-in takes priority, then fade-out, then default to 0 to prevent flashing)
+		// CRITICAL: Always default to 0 to prevent any flashing
+		let opacity = 0
+		
+		// Emergency fallback: if fadeInOpacity is somehow still undefined, initialize it now
+		if (obstacle.fadeInOpacity === undefined || obstacle.fadeInStartTime === undefined) {
+			obstacle.fadeInOpacity = 0
+			obstacle.fadeInStartTime = Date.now()
+			opacity = 0
+		} else if (!obstacle.fading) {
+			// Use fade-in opacity if not fading out
+			// Ensure we never use a value > 1.0 or < 0
+			opacity = Math.max(0, Math.min(1.0, obstacle.fadeInOpacity))
 		}
+		
+		// Fade-out takes priority over fade-in
 		if (obstacle.fading && obstacle.fadeOpacity !== undefined) {
-			opacity = obstacle.fadeOpacity
+			opacity = Math.max(0, Math.min(1.0, obstacle.fadeOpacity))
 		}
 		
 		ctx.save()
@@ -1396,6 +2458,213 @@ function drawObstacles() {
 		
 		ctx.restore()
 	}
+}
+
+function drawStar() {
+	if (!star) return
+	
+	let radius = star.radius
+	let x = star.xPos
+	let y = star.yPos
+	
+	ctx.save()
+	
+	// Draw white star (5-pointed) with bright white fill and outline
+	ctx.fillStyle = "#ffffff"
+	ctx.strokeStyle = "#000000"
+	ctx.lineWidth = 3
+	ctx.beginPath()
+	
+	let starPoints = 5
+	let outerRadius = radius
+	let innerRadius = radius * 0.4
+	
+	for (let i = 0; i < starPoints * 2; i++) {
+		let angle = (Math.PI * i) / starPoints - Math.PI / 2
+		let r = (i % 2 === 0) ? outerRadius : innerRadius
+		let px = x + Math.cos(angle) * r
+		let py = y + Math.sin(angle) * r
+		if (i === 0) {
+			ctx.moveTo(px, py)
+		} else {
+			ctx.lineTo(px, py)
+		}
+	}
+	ctx.closePath()
+	ctx.fill()
+	ctx.stroke()
+	
+	ctx.restore()
+}
+
+function drawSwitcher() {
+	if (!switcher) return
+	
+	let radius = switcher.radius
+	let x = switcher.xPos
+	let y = switcher.yPos
+	
+	ctx.save()
+	
+	// Draw black background circle (no outline)
+	ctx.fillStyle = "#000000"
+	ctx.beginPath()
+	ctx.arc(x, y, radius, 0, 2 * Math.PI)
+	ctx.fill()
+	
+	// Draw two thick, curved white arrows forming an almost complete circle
+	let circleRadius = radius * 0.5 // Radius of the circular path
+	let arrowThickness = radius * 0.25 // Thickness of arrow body (thick and bold)
+	let arrowHeadSize = radius * 0.3 // Size of arrowhead
+	let arrowArcLength = Math.PI * 0.85 // Length of arc each arrow covers (almost complete circle)
+	let gapSize = Math.PI * 0.15 // Small gap between arrows
+	
+	// Top arrow: starts from left-middle, curves clockwise up and right, arrowhead points right
+	// Left-middle is at 180 degrees, curves clockwise ending around 0 degrees (pointing right)
+	let topArrowStartAngle = Math.PI // Start at left-middle (180 degrees)
+	let topArrowEndAngle = 0 // End pointing right (0 degrees) - wraps around clockwise
+	
+	// Bottom arrow: starts from right-middle, curves clockwise down and left, arrowhead points left
+	// Right-middle is at 0 degrees, but we need a gap, so start after the top arrow ends
+	// Actually, bottom arrow starts at 0 and curves to 180 (pointing left)
+	let bottomArrowStartAngle = topArrowEndAngle + gapSize // Start after gap from top arrow end
+	let bottomArrowEndAngle = Math.PI // End pointing left (180 degrees)
+	
+	ctx.strokeStyle = "#ffffff"
+	ctx.fillStyle = "#ffffff"
+	ctx.lineWidth = arrowThickness
+	ctx.lineCap = "round"
+	ctx.lineJoin = "round"
+	
+	// Draw top arrow
+	ctx.save()
+	ctx.translate(x, y)
+	ctx.beginPath()
+	ctx.arc(0, 0, circleRadius, topArrowStartAngle, topArrowEndAngle)
+	ctx.stroke()
+	
+	// Draw top arrowhead (pointing right)
+	let topArrowHeadX = Math.cos(topArrowEndAngle) * circleRadius
+	let topArrowHeadY = Math.sin(topArrowEndAngle) * circleRadius
+	ctx.save()
+	ctx.translate(topArrowHeadX, topArrowHeadY)
+	ctx.rotate(topArrowEndAngle + Math.PI / 2) // Point along the tangent
+	ctx.beginPath()
+	ctx.moveTo(0, 0)
+	ctx.lineTo(-arrowHeadSize, -arrowHeadSize * 0.6)
+	ctx.lineTo(arrowHeadSize, -arrowHeadSize * 0.6)
+	ctx.closePath()
+	ctx.fill()
+	ctx.restore()
+	ctx.restore()
+	
+	// Draw bottom arrow
+	ctx.save()
+	ctx.translate(x, y)
+	ctx.beginPath()
+	ctx.arc(0, 0, circleRadius, bottomArrowStartAngle, bottomArrowEndAngle)
+	ctx.stroke()
+	
+	// Draw bottom arrowhead (pointing left)
+	let bottomArrowHeadX = Math.cos(bottomArrowEndAngle) * circleRadius
+	let bottomArrowHeadY = Math.sin(bottomArrowEndAngle) * circleRadius
+	ctx.save()
+	ctx.translate(bottomArrowHeadX, bottomArrowHeadY)
+	ctx.rotate(bottomArrowEndAngle + Math.PI / 2) // Point along the tangent
+	ctx.beginPath()
+	ctx.moveTo(0, 0)
+	ctx.lineTo(-arrowHeadSize, -arrowHeadSize * 0.6)
+	ctx.lineTo(arrowHeadSize, -arrowHeadSize * 0.6)
+	ctx.closePath()
+	ctx.fill()
+	ctx.restore()
+	ctx.restore()
+	
+	ctx.restore()
+}
+
+function drawSkull() {
+	if (!skull) return
+	
+	let radius = skull.radius
+	let x = skull.xPos
+	let y = skull.yPos
+	
+	ctx.save()
+	
+	// Draw white skull (circle for head)
+	ctx.fillStyle = "#ffffff"
+	ctx.strokeStyle = "#000000"
+	ctx.lineWidth = 2
+	ctx.beginPath()
+	ctx.arc(x, y - radius * 0.1, radius * 0.6, 0, 2 * Math.PI)
+	ctx.fill()
+	ctx.stroke()
+	
+	// Draw eye sockets (two circles)
+	ctx.fillStyle = "#000000"
+	ctx.beginPath()
+	ctx.arc(x - radius * 0.2, y - radius * 0.15, radius * 0.12, 0, 2 * Math.PI)
+	ctx.fill()
+	ctx.beginPath()
+	ctx.arc(x + radius * 0.2, y - radius * 0.15, radius * 0.12, 0, 2 * Math.PI)
+	ctx.fill()
+	
+	// Draw nose (triangle)
+	ctx.beginPath()
+	ctx.moveTo(x, y - radius * 0.05)
+	ctx.lineTo(x - radius * 0.08, y + radius * 0.05)
+	ctx.lineTo(x + radius * 0.08, y + radius * 0.05)
+	ctx.closePath()
+	ctx.fill()
+	
+	// Draw jaw (bottom part of skull)
+	ctx.beginPath()
+	ctx.arc(x, y + radius * 0.2, radius * 0.4, 0, Math.PI)
+	ctx.fill()
+	ctx.stroke()
+	
+	// Draw crossbones (two bones forming an X)
+	ctx.strokeStyle = "#ffffff"
+	ctx.fillStyle = "#ffffff"
+	ctx.lineWidth = radius * 0.15
+	ctx.lineCap = "round"
+	
+	// First bone (top-left to bottom-right)
+	ctx.save()
+	ctx.translate(x, y)
+	ctx.rotate(Math.PI / 4)
+	ctx.beginPath()
+	ctx.moveTo(-radius * 0.5, 0)
+	ctx.lineTo(radius * 0.5, 0)
+	ctx.stroke()
+	// Bone ends (small circles)
+	ctx.beginPath()
+	ctx.arc(-radius * 0.5, 0, radius * 0.08, 0, 2 * Math.PI)
+	ctx.fill()
+	ctx.beginPath()
+	ctx.arc(radius * 0.5, 0, radius * 0.08, 0, 2 * Math.PI)
+	ctx.fill()
+	ctx.restore()
+	
+	// Second bone (top-right to bottom-left)
+	ctx.save()
+	ctx.translate(x, y)
+	ctx.rotate(-Math.PI / 4)
+	ctx.beginPath()
+	ctx.moveTo(-radius * 0.5, 0)
+	ctx.lineTo(radius * 0.5, 0)
+	ctx.stroke()
+	// Bone ends (small circles)
+	ctx.beginPath()
+	ctx.arc(-radius * 0.5, 0, radius * 0.08, 0, 2 * Math.PI)
+	ctx.fill()
+	ctx.beginPath()
+	ctx.arc(radius * 0.5, 0, radius * 0.08, 0, 2 * Math.PI)
+	ctx.fill()
+	ctx.restore()
+	
+	ctx.restore()
 }
 
 function drawTrophy() {
@@ -1635,12 +2904,12 @@ function updateTutorial() {
 		if (tutorialStep === 1) {
 			text = "Fling the grey ball"
 		} else if (tutorialStep === 2) {
-			text = "Hit all the blue balls"
+			text = "Hit all the blue balls to win"
 		} else if (tutorialStep === 3) {
 			text = "Tap blue then red to switch them"
 		}
 	} else if (level === 2) {
-		text = "Switch red and blue balls by tapping them"
+		text = "Tap any two items to swap them"
 	}
 
 	// Set text and measure once for simple centered placement near the bottom.
@@ -1659,14 +2928,14 @@ function updateTutorial() {
 	
 	let topExclusionY = canvas.height * 0.2
 	
-	// Base position: relative to the ball's y-position, horizontally centered.
+	// Base position: horizontally centered, vertically relative to ball.
 	let ballRadius = getBallRadius()
 	let baseX = canvas.width / 2
 	// Place the text three ball-radii (1.5 diameters) above the ball.
 	let baseY = (ball?.yPos ?? (canvas.height - padding - textHalfHeight)) - (3 * ballRadius)
 
-	// Clamp inside safe region and away from score area at the very top.
-	let xPos = Math.max(padding + textHalfWidth, Math.min(baseX, canvas.width - padding - textHalfWidth))
+	// Center horizontally, clamp vertically inside safe region.
+	let xPos = baseX
 	let yPos = Math.max(topExclusionY + textHalfHeight + padding, Math.min(baseY, canvas.height - padding - textHalfHeight))
 
 	// For level 1, remember the absolute position we actually used.
