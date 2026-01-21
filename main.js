@@ -43,12 +43,14 @@ let lightning = null // Orange lightning bolt that gives pass-through (spawns st
 let lightningImage = null // Image for lightning bolt
 let bush = null // Green bush that slows ball and gives green border (spawns starting level 5, cycles through items)
 let wormhole = null // Array of two purple wormholes that teleport ball between them (spawns starting level 5, cycles through items)
-let crossHitThisTry = false // Track if cross has been hit this try (idempotent)
+let starHitThisTry = false // Track whether ball was colliding with star on the previous frame (for hit detection)
+let crossHitThisTry = false // Track whether ball was colliding with cross on the previous frame (for hit detection)
 let availableSpecialItems = ['star', 'switcher', 'cross', 'lightning', 'bush', 'wormhole'] // Track which special items haven't been shown yet in current cycle
 let currentLevelSpecialItem = null // Track which special item type was selected for the current level
 let currentLevelSpecialItems = [] // Track which special items were selected for current level (for when 2 items spawn)
 let lightningEffectActive = false // Track if lightning effect is currently active (lasts for rest of try)
 let bushEffectActive = false // Track if bush effect is currently active (lasts for rest of try)
+let wormholeEffectActive = false // Track if wormhole effect (purple border) is currently active (lasts for rest of try)
 let ballStoppedByBushEffect = false // Track if ball was stopped by bush effect (prevents auto-reset until user flings again)
 let trophy = null // Trophy that appears after collecting all targets
 let savedTargets = [] // Saved positions for retry
@@ -75,8 +77,12 @@ let previousBallY = null
 // Track whether we've already completed at least one level (so we can skip
 // the spawn animation for the very first level).
 let hasCompletedALevel = false
-// Simple three-step tutorial for level 1
-let tutorialStep = 0 // 0 = off, 1..3 = active steps
+// Tutorial steps:
+// 1 = "Fling the grey ball"
+// 2 = "Hit all the blue balls ..."
+// 3 = "Swap any two items by tapping them" (still level 1)
+// 4 = "Think carefully and aim true!" (shown on level 2)
+let tutorialStep = 0 // 0 = off
 let tutorialCompleted = false
 // Remember last on-screen tutorial position so follow-up levels can reuse it.
 let tutorialLastX = null
@@ -170,9 +176,10 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 		lightning = null
 		bush = null
 		wormhole = null
-		// Reset lightning and bush effects
+		// Reset lightning, bush, and wormhole effects
 		lightningEffectActive = false
 		bushEffectActive = false
+		wormholeEffectActive = false
 		ballStoppedByBushEffect = false
 		// Reset wormhole teleport cooldown and pending teleport
 		wormholeLastTeleportTime = 0
@@ -447,6 +454,13 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 	trophy = null // Reset trophy for new level
 	pendingNextLevel = false
 	autoResetActive = false
+
+	// Hide any trophy hint overlay when starting a new level
+	let existingHint = document.getElementById("trophyHintOverlay")
+	if (existingHint) {
+		existingHint.style.visibility = "hidden"
+		existingHint.style.opacity = "0"
+	}
  
 	// Ensure grey ball is fully visible (no fade behavior)
 	// But keep it hidden if it's in transit through a wormhole
@@ -494,11 +508,11 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 	crossHitThisTry = false // Reset cross hit flag for new try
 	// Initialize or clear tutorial for this level
 	if (level === 1 && !tutorialCompleted) {
-		// Level 1: full multi-step tutorial (fling, hit, switch)
+		// Level 1: steps 1–3 (fling, hit, swap)
 		tutorialStep = 1
 	} else if (level === 2) {
-		// Level 2: single reminder about switching mechanic
-		tutorialStep = 1
+		// Level 2: start at step 3 ("Swap any two items by tapping them")
+		tutorialStep = 3
 	} else {
 		tutorialStep = 0
 	}
@@ -2126,22 +2140,18 @@ function handleTouchmove(e) {
 			shotActive = true
 			// Reset cross hit flag when starting a new try
 			crossHitThisTry = false
+			// Reset star hit flag when starting a new try
+			starHitThisTry = false
 			// Handle tutorial progression when the ball is flung.
-			// Level 1: multi-step tutorial (only advance 1 -> 2 here).
-			if (level === 1 && !tutorialCompleted && tutorialStep === 1) {
+			// Level 1: advance from step 1 -> 2 on first fling.
+			if (level === 1 && tutorialStep === 1) {
 				tutorialStep = 2
 				updateTutorial()
 			}
-			// Level 2: when the ball is flung for the first time on this level,
-			// show the final tutorial text. Subsequent flings on the same level
-			// won't re-show it after it has faded out.
-			if (level === 2 && tries === 0) {
-				let tutorialOverlay = document.getElementById("tutorialOverlay")
-				if (tutorialOverlay) {
-					tutorialOverlay.textContent = "Think carefully, aim true, and seize glory!"
-					tutorialOverlay.style.opacity = "1"
-					tutorialOverlay.style.visibility = "visible"
-				}
+			// Level 2: advance from step 3 -> 4 on first fling.
+			if (level === 2 && tutorialStep === 3) {
+				tutorialStep = 4
+				updateTutorial()
 			}
 			tries++
 		}
@@ -2466,9 +2476,42 @@ function placeTrophy() {
 	let ballBottomY = ballTargetY + ballRadius
 	
 		while (!validPosition && attempts < maxAttempts) {
-			// Random position on canvas
-			xPos = trophyRadius + (canvas.width - 2 * trophyRadius) * Math.random()
-			yPos = trophyRadius + (canvas.height - 2 * trophyRadius) * Math.random()
+			// Choose horizontal position:
+			// - Level 2: fixed at horizontal center.
+			// - Other levels: random across the width (with padding for trophy radius).
+			if (level === 2) {
+				xPos = canvas.width / 2
+			} else {
+				xPos = trophyRadius + (canvas.width - 2 * trophyRadius) * Math.random()
+			}
+
+			// Choose vertical position:
+			// - Level 1: random within the top half.
+			// - Level 2: a fixed position above the tutorial text, still in the top half.
+			// - Later levels: full vertical range.
+			if (level === 1) {
+				let maxTopHalfHeight = canvas.height / 2 - trophyRadius
+				if (maxTopHalfHeight < trophyRadius) {
+					maxTopHalfHeight = trophyRadius
+				}
+				yPos = trophyRadius + (maxTopHalfHeight - trophyRadius) * Math.random()
+			} else if (level === 2) {
+				let tutorialOverlay = document.getElementById("tutorialOverlay")
+				// `top` on the overlay is the center Y used in updateTutorial.
+				let tutorialCenterY = tutorialOverlay && tutorialOverlay.style.top
+					? parseFloat(tutorialOverlay.style.top)
+					: canvas.height * 0.5
+				// Place the trophy a bit higher above the tutorial text.
+				let offsetAboveText = trophyRadius * 1.7
+				let desiredY = tutorialCenterY - offsetAboveText
+				// Clamp to stay within the top half and inside the canvas.
+				let minY = trophyRadius
+				let maxY = canvas.height / 2 - trophyRadius
+				if (maxY < minY) maxY = minY
+				yPos = Math.max(minY, Math.min(desiredY, maxY))
+			} else {
+				yPos = trophyRadius + (canvas.height - 2 * trophyRadius) * Math.random()
+			}
 			validPosition = true
 			
 			// Never place the trophy in the top-right quadrant of the board
@@ -2510,7 +2553,12 @@ function placeTrophy() {
 	// Fallback: place at center if no valid position found
 	if (!validPosition) {
 		xPos = canvas.width / 2
-		yPos = canvas.height / 2
+		// On levels 1 and 2, keep the fallback in the top half as well
+		if (level === 1 || level === 2) {
+			yPos = canvas.height / 4
+		} else {
+			yPos = canvas.height / 2
+		}
 		// Still ensure it's above the ball's bottom position
 		if (yPos - trophyRadius > ballBottomY - minVerticalSeparation) {
 			yPos = ballBottomY - minVerticalSeparation + trophyRadius
@@ -2528,6 +2576,33 @@ function placeTrophy() {
 	// Clear the last target position once we've placed the trophy
 	lastTargetX = null
 	lastTargetY = null
+
+	// On level 1, while step 2 tutorial text is showing, also show a trophy hint line.
+	if (level === 1 && tutorialStep === 2) {
+		let hint = document.getElementById("trophyHintOverlay")
+		if (!hint) {
+			hint = document.createElement("div")
+			hint.id = "trophyHintOverlay"
+			hint.style.position = "absolute"
+			hint.style.color = "white"
+			hint.style.fontFamily = "Arial"
+			hint.style.fontSize = "24px"
+			hint.style.pointerEvents = "none"
+			hint.style.textAlign = "center"
+			hint.style.textShadow = "-2px -2px 0 black, 2px -2px 0 black, -2px 2px 0 black, 2px 2px 0 black, -2px 0 0 black, 2px 0 0 black, 0 -2px 0 black, 0 2px 0 black"
+			let container = document.getElementById("canvasContainer") || document.body
+			container.appendChild(hint)
+		}
+		hint.textContent = "(then collect the trophy)"
+		// Center horizontally at 60% canvas height
+		let x = canvas.width / 2
+		let y = canvas.height * 0.6
+		hint.style.left = x + "px"
+		hint.style.top = y + "px"
+		hint.style.transform = "translate(-50%, -50%)"
+		hint.style.visibility = "visible"
+		hint.style.opacity = "1"
+	}
 }
 
 function placeTargets() {
@@ -3585,7 +3660,7 @@ function handleCollisionWithTarget() {
 				lastTargetX = targetX
 				lastTargetY = targetY
 				
-				// Start fading obstacles and create red fireworks after delay
+				// Start fading obstacles and special items and create red fireworks after delay
 				setTimeout(() => {
 					for (let j = 0; j < obstacles.length; j++) {
 						let obstacle = obstacles[j]
@@ -3593,19 +3668,25 @@ function handleCollisionWithTarget() {
 						obstacle.fadeOpacity = 1.0
 						obstacle.fading = true
 					}
+					
+					// Also remove any special items so they disappear with the obstacles
+					star = null
+					switcher = null
+					cross = null
+					lightning = null
+					bush = null
+					wormhole = null
 				}, OBSTACLE_FADE_DELAY)
 				
-				// Fade tutorial text after delay (but skip step 2 and level 2 tutorial - they fade after trophy)
+				// Fade tutorial text after delay (but skip step 2 and all of level 2 tutorial - they fade after trophy)
 				tutorialExplosionTimeout = setTimeout(() => {
 					let tutorialOverlay = document.getElementById("tutorialOverlay")
 					if (tutorialOverlay && tutorialOverlay.style.visibility === "visible") {
-						let tutorialText = tutorialOverlay.textContent
-						// Don't fade step 2 here - it stays until next level appears
-						// Don't fade level 2 tutorial here - it stays until next level appears
-						if (tutorialText !== "Hit all the blue balls to win" && 
-						    tutorialText !== "Think carefully, aim true, and seize glory!") {
+						// Don't fade step 2 on level 1 or any tutorial text on level 2 here –
+						// they should remain visible until the next level actually appears.
+						if (!((level === 1 && tutorialStep === 2) || level === 2)) {
 							tutorialOverlay.style.opacity = "0"
-						}
+ 						}
 					}
 					tutorialExplosionTimeout = null
 				}, TUTORIAL_FADE_DELAY)
@@ -3689,30 +3770,33 @@ function handleCollisionWithStar() {
 	let distance = Math.hypot(dx, dy)
 	let collisionDistance = ballRadius + star.radius
 	
-	if (distance < collisionDistance && distance > 0) {
-		// Save star position before removing it
+	// Detect a new hit only when we enter the collision area (not every frame we overlap)
+	let isCollidingNow = distance < collisionDistance && distance > 0
+	let wasCollidingBefore = starHitThisTry
+	
+	if (isCollidingNow && !wasCollidingBefore) {
+		// Save star position (use fixed point even if star is moved later)
 		let starX = star.xPos
 		let starY = star.yPos
 		
-		// Ball hit the star - remove the 3 obstacles closest to the star
+		// Each hit: halve obstacle count (rounding up) and remove that many, closest first
 		if (obstacles.length > 0) {
+			let removeCount = Math.ceil(obstacles.length / 2)
+			
 			// Calculate distances from star to all obstacles
 			let obstaclesWithDistances = obstacles.map((obstacle, index) => {
-				let dx = star.xPos - obstacle.xPos
-				let dy = star.yPos - obstacle.yPos
+				let dx = starX - obstacle.xPos
+				let dy = starY - obstacle.yPos
 				let dist = Math.hypot(dx, dy)
-				return { obstacle, index, distance: dist }
+				return { index, distance: dist }
 			})
 			
 			// Sort by distance (closest first)
 			obstaclesWithDistances.sort((a, b) => a.distance - b.distance)
 			
-			// Remove the 3 closest obstacles (or all if fewer than 3)
-			let removeCount = Math.min(3, obstaclesWithDistances.length)
+			// Remove the N closest obstacles
 			let indicesToRemove = obstaclesWithDistances.slice(0, removeCount).map(item => item.index)
-			
-			// Sort indices in descending order to remove from end to start (avoids index shifting issues)
-			indicesToRemove.sort((a, b) => b - a)
+			indicesToRemove.sort((a, b) => b - a) // remove from end to start to avoid index shifting
 			for (let idx of indicesToRemove) {
 				obstacles.splice(idx, 1)
 			}
@@ -3722,6 +3806,9 @@ function handleCollisionWithStar() {
 		// star = null
 		// Don't update savedObstacles - auto-reset should restore to original level state
 	}
+	
+	// Remember collision state for next frame (true while overlapping, false otherwise)
+	starHitThisTry = isCollidingNow
 }
 
 function handleCollisionWithSwitcher() {
@@ -3775,7 +3862,7 @@ function handleCollisionWithSwitcher() {
 }
 
 function handleCollisionWithCross() {
-	if (!cross || crossHitThisTry) return // Idempotent: only work once per try
+	if (!cross) return
 	
 	let ballRadius = getBallRadius()
 	let dx = ball.xPos - cross.xPos
@@ -3783,8 +3870,13 @@ function handleCollisionWithCross() {
 	let distance = Math.hypot(dx, dy)
 	let collisionDistance = ballRadius + cross.radius
 	
-	if (distance < collisionDistance && distance > 0) {
-		// Ball hit the cross - double the number of obstacles (idempotent)
+	// Detect a new hit only when we enter the collision area (not every frame we overlap)
+	let isCollidingNow = distance < collisionDistance && distance > 0
+	let wasCollidingBefore = crossHitThisTry
+	
+	if (isCollidingNow && !wasCollidingBefore) {
+		// Ball hit the cross - double the number of obstacles
+		// Remember that we just hit this frame (used as previous-frame collision flag)
 		crossHitThisTry = true
 		
 		// Save current obstacle count
@@ -3905,7 +3997,11 @@ function handleCollisionWithCross() {
 		// Keep the cross on the board after hit
 		// cross = null
 	}
+
+	// Remember collision state for next frame (true while overlapping, false otherwise)
+	crossHitThisTry = isCollidingNow
 }
+
 
 function handleCollisionWithLightning() {
 	if (!lightning) return
@@ -3990,9 +4086,10 @@ function handleCollisionWithWormhole() {
 		let collisionDistance = ballRadius + wh.radius
 		
 		if (distance < collisionDistance && distance > 0) {
-			// Clear any existing special item effects
+			// Clear any existing special item effects and activate wormhole border
 			lightningEffectActive = false
 			bushEffectActive = false
+			wormholeEffectActive = true
 			ballStoppedByBushEffect = false
 			
 			// Find the other wormhole
@@ -4358,6 +4455,15 @@ function drawBall() {
 		ctx.stroke()
 	}
 	
+	// Draw purple border if wormhole effect is active
+	if (wormholeEffectActive) {
+		ctx.strokeStyle = "#aa55ff"
+		ctx.lineWidth = radius * 0.15
+		ctx.beginPath()
+		ctx.arc(x, y, radius, 0, 2 * Math.PI)
+		ctx.stroke()
+	}
+	
 
 	ctx.restore()
 }
@@ -4658,8 +4764,9 @@ function drawStar() {
 	ctx.beginPath()
 	
 	let starPoints = 5
-	let outerRadius = radius
-	let innerRadius = radius * 0.4
+	// Slightly larger visual star while keeping collision radius the same
+	let outerRadius = radius * 1.15
+	let innerRadius = radius * 0.46
 	
 	for (let i = 0; i < starPoints * 2; i++) {
 		let angle = (Math.PI * i) / starPoints - Math.PI / 2
@@ -4806,22 +4913,22 @@ function drawCross() {
 	ctx.save()
 	ctx.globalAlpha = opacity
 	
-	// Draw white X
+	// Draw white X (slightly larger than collision radius for visual emphasis)
 	ctx.strokeStyle = "#ffffff"
 	ctx.fillStyle = "#ffffff"
-	ctx.lineWidth = radius * 0.25
+	ctx.lineWidth = radius * 0.3
 	ctx.lineCap = "round"
 	
 	// First diagonal line (top-left to bottom-right)
 	ctx.beginPath()
-	ctx.moveTo(x - radius * 0.5, y - radius * 0.5)
-	ctx.lineTo(x + radius * 0.5, y + radius * 0.5)
+	ctx.moveTo(x - radius * 0.6, y - radius * 0.6)
+	ctx.lineTo(x + radius * 0.6, y + radius * 0.6)
 	ctx.stroke()
 	
 	// Second diagonal line (top-right to bottom-left)
 	ctx.beginPath()
-	ctx.moveTo(x + radius * 0.5, y - radius * 0.5)
-	ctx.lineTo(x - radius * 0.5, y + radius * 0.5)
+	ctx.moveTo(x + radius * 0.6, y - radius * 0.6)
+	ctx.lineTo(x - radius * 0.6, y + radius * 0.6)
 	ctx.stroke()
 	
 	ctx.restore()
@@ -5048,8 +5155,8 @@ function updateTutorial() {
 	if (!tutorialOverlay || !canvas) return
 	
 	// Tutorial runs:
-	// - Level 1: multi-step tutorial (fling, hit, switch).
-	// - Level 2: single reminder text about switching.
+	// - Level 1: steps 1–3 (fling, hit, swap).
+	// - Level 2: steps 3–4 (start at swap, then show the final hint).
 	if ((level === 1 && (tutorialStep === 0 || tutorialCompleted)) ||
 	    (level === 2 && tutorialStep === 0) ||
 	    (level !== 1 && level !== 2)) {
@@ -5064,15 +5171,19 @@ function updateTutorial() {
 		if (tutorialStep === 1) {
 			text = "Fling the grey ball"
 		} else if (tutorialStep === 2) {
-			text = "Hit all the blue balls to win"
+			text = "Hit all the blue balls in one shot"
 		} else if (tutorialStep === 3) {
-			text = "Tap blue then red to switch them"
+			text = "Swap any two items by tapping them"
 		}
 	} else if (level === 2) {
-		text = "Tap any two items to swap them"
+		if (tutorialStep === 3) {
+			text = "Swap any two items by tapping them"
+		} else if (tutorialStep === 4) {
+			text = "Think carefully, aim true, and seize glory!"
+		}
 	}
 
-	// Set text and measure once for simple centered placement near the bottom.
+	// Set text and measure once for centered placement on screen.
 	tutorialOverlay.textContent = text
 	tutorialOverlay.style.visibility = "hidden"
 	tutorialOverlay.offsetHeight // force reflow
@@ -5086,28 +5197,35 @@ function updateTutorial() {
 	let textHalfWidth = textWidth / 2
 	let textHalfHeight = textHeight / 2
 	
-	let topExclusionY = canvas.height * 0.2
+	// Base centered position
+	let xPos = canvas.width / 2
+	let yPos = canvas.height * 0.5
 	
-	// Base position: horizontally centered, vertically relative to ball.
-	let ballRadius = getBallRadius()
-	let baseX = canvas.width / 2
-	// Place the text three ball-radii (1.5 diameters) above the ball.
-	let baseY = (ball?.yPos ?? (canvas.height - padding - textHalfHeight)) - (3 * ballRadius)
-
-	// Center horizontally, clamp vertically inside safe region.
-	let xPos = baseX
-	let yPos = Math.max(topExclusionY + textHalfHeight + padding, Math.min(baseY, canvas.height - padding - textHalfHeight))
-
-	// For level 1, remember the absolute position we actually used.
-	if (level === 1) {
-		tutorialLastX = xPos
-		tutorialLastY = yPos
+	// For step 1, position the text above the ball and remember that position.
+	if (tutorialStep === 1) {
+		let ballRadius = getBallRadius()
+		let paddingY = padding
+		let topExclusionY = canvas.height * 0.2
+		// Place the text three ball-radii (1.5 diameters) above the ball.
+		let baseY = (ball?.yPos ?? (canvas.height - paddingY - textHalfHeight)) - (3 * ballRadius)
+		// Clamp inside safe region.
+		yPos = Math.max(
+			topExclusionY + textHalfHeight + paddingY,
+			Math.min(baseY, canvas.height - paddingY - textHalfHeight)
+		)
 	}
-
-	// For level 2, reuse the exact absolute position from level 1 if we have it.
-	if (level === 2 && tutorialLastX !== null && tutorialLastY !== null) {
+	
+	// For step 3, reuse the exact position recorded from step 1 (if available),
+	// so it visually matches the step 1 location on all levels.
+	if (tutorialStep === 3 && tutorialLastX !== null && tutorialLastY !== null) {
 		xPos = tutorialLastX
 		yPos = tutorialLastY
+	}
+	
+	// For level 1, when we're on step 1, remember the absolute position we used.
+	if (level === 1 && tutorialStep === 1) {
+		tutorialLastX = xPos
+		tutorialLastY = yPos
 	}
 
 	tutorialOverlay.style.left = xPos + "px"
