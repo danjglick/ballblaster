@@ -29,6 +29,10 @@ let ball = {
 	isBeingFlung: false,
 	fadeOpacity: 1.0
 }
+let wormholeLastTeleportTime = 0 // Track when ball last teleported through a wormhole
+let wormholeCooldown = 200 // Milliseconds to wait before allowing another teleport
+let wormholeTeleportPending = null // { startTime: number, destX: number, destY: number, xVel: number, yVel: number }
+let wormholeDisabledUntil = 0 // Timestamp when wormholes become available again (2 seconds after use)
 let targets = []
 let targetsRemaining = []
 let obstacles = []
@@ -37,14 +41,13 @@ let switcher = null // White loop symbol that switches all red and blue balls wh
 let cross = null // White cross/X mark that doubles obstacles when hit (spawns starting level 5, cycles through items)
 let lightning = null // Orange lightning bolt that gives pass-through (spawns starting level 5, cycles through items)
 let bush = null // Green bush that slows ball and gives green border (spawns starting level 5, cycles through items)
-let magnet = null // Purple magnet that causes targets to drift towards ball when close (spawns starting level 5, cycles through items)
+let wormhole = null // Array of two purple wormholes that teleport ball between them (spawns starting level 5, cycles through items)
 let crossHitThisTry = false // Track if cross has been hit this try (idempotent)
-let availableSpecialItems = ['star', 'switcher', 'cross', 'lightning', 'bush', 'magnet'] // Track which special items haven't been shown yet in current cycle
+let availableSpecialItems = ['star', 'switcher', 'cross', 'lightning', 'bush', 'wormhole'] // Track which special items haven't been shown yet in current cycle
 let currentLevelSpecialItem = null // Track which special item type was selected for the current level
 let currentLevelSpecialItems = [] // Track which special items were selected for current level (for when 2 items spawn)
 let lightningEffectActive = false // Track if lightning effect is currently active (lasts for rest of try)
 let bushEffectActive = false // Track if bush effect is currently active (lasts for rest of try)
-let magnetEffectActive = false // Track if magnet effect is currently active (purple border, lasts for rest of try)
 let ballStoppedByBushEffect = false // Track if ball was stopped by bush effect (prevents auto-reset until user flings again)
 let trophy = null // Trophy that appears after collecting all targets
 let savedTargets = [] // Saved positions for retry
@@ -55,7 +58,7 @@ let savedSwitcher = null // Saved switcher position for retry
 let savedCross = null // Saved cross position for retry
 let savedLightning = null // Saved lightning position for retry
 let savedBush = null // Saved bush position for retry
-let savedMagnet = null // Saved magnet position for retry
+let savedWormhole = null // Saved wormhole positions for retry
 let isConvertingObstacle = false
 let selectedForConversion = null // { type: 'obstacle' | 'target' | 'star', index: number }
 let touch1 = {
@@ -161,12 +164,15 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 		cross = null
 		lightning = null
 		bush = null
-		magnet = null
-		// Reset lightning, bush, and cannon effects
+		wormhole = null
+		// Reset lightning and bush effects
 		lightningEffectActive = false
 		bushEffectActive = false
-		magnetEffectActive = false
 		ballStoppedByBushEffect = false
+		// Reset wormhole teleport cooldown and pending teleport
+		wormholeLastTeleportTime = 0
+		wormholeTeleportPending = null
+		wormholeDisabledUntil = 0
 		// Spawn special items per level starting at level 5
 		// First cycle: one item per level, randomly cycling through all items
 		// After all items shown once: two items per level
@@ -190,8 +196,8 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 						placeLightning()
 					} else if (item === 'bush') {
 						placeBush()
-					} else if (item === 'magnet') {
-						placeMagnet()
+					} else if (item === 'wormhole') {
+						placeWormholes()
 					}
 				}
 			} else if (currentLevelSpecialItem) {
@@ -206,14 +212,14 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 					placeLightning()
 				} else if (currentLevelSpecialItem === 'bush') {
 					placeBush()
-				} else if (currentLevelSpecialItem === 'magnet') {
-					placeMagnet()
+				} else if (currentLevelSpecialItem === 'wormhole') {
+					placeWormholes()
 				}
 			} else {
 				// New level - check if all items have been shown once
 				if (availableSpecialItems.length === 0) {
 					// All items shown once - spawn items based on level
-					const allItems = ['star', 'switcher', 'cross', 'lightning', 'bush', 'magnet']
+					const allItems = ['star', 'switcher', 'cross', 'lightning', 'bush', 'wormhole']
 					const selectedItems = []
 					
 					// Determine number of items to spawn based on level
@@ -249,8 +255,8 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 							placeLightning()
 						} else if (item === 'bush') {
 							placeBush()
-						} else if (item === 'magnet') {
-							placeMagnet()
+						} else if (item === 'wormhole') {
+							placeWormholes()
 						}
 					}
 				} else {
@@ -271,8 +277,8 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 						placeLightning()
 					} else if (selectedItem === 'bush') {
 						placeBush()
-					} else if (selectedItem === 'magnet') {
-						placeMagnet()
+					} else if (selectedItem === 'wormhole') {
+						placeWormholes()
 					}
 				}
 			}
@@ -292,7 +298,7 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 		savedCross = cross ? JSON.parse(JSON.stringify(cross)) : null
 		savedLightning = lightning ? JSON.parse(JSON.stringify(lightning)) : null
 		savedBush = bush ? JSON.parse(JSON.stringify(bush)) : null
-		savedMagnet = magnet ? JSON.parse(JSON.stringify(magnet)) : null
+		savedWormhole = wormhole ? JSON.parse(JSON.stringify(wormhole)) : null
 	} else {
 		// Normal retry - restore obstacles and targets for current level
 		// Level stays the same, so tutorial stays the same
@@ -336,14 +342,13 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 				if (!currentLevelSpecialItem) currentLevelSpecialItem = 'bush'
 				currentLevelSpecialItems.push('bush')
 			}
-			if (magnet) {
-				if (!currentLevelSpecialItem) currentLevelSpecialItem = 'magnet'
-				currentLevelSpecialItems.push('magnet')
+			if (wormhole) {
+				if (!currentLevelSpecialItem) currentLevelSpecialItem = 'wormhole'
+				currentLevelSpecialItems.push('wormhole')
 			}
-			// Reset lightning, bush, and cannon effects
+			// Reset lightning and bush effects
 			lightningEffectActive = false
 			bushEffectActive = false
-			magnetEffectActive = false
 			ballStoppedByBushEffect = false
 		} else {
 			// Generate new positions (first retry or no saved positions)
@@ -356,11 +361,10 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 			cross = null
 			lightning = null
 			bush = null
-			magnet = null
-			// Reset lightning, bush, and cannon effects
+			wormhole = null
+			// Reset lightning and bush effects
 			lightningEffectActive = false
 			bushEffectActive = false
-			magnetEffectActive = false
 			ballStoppedByBushEffect = false
 			// Spawn special items per level starting at level 5
 			// For retries, use the same item types that were selected for this level
@@ -415,7 +419,8 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 	autoResetActive = false
  
 	// Ensure grey ball is fully visible (no fade behavior)
-	if (ball) {
+	// But keep it hidden if it's in transit through a wormhole
+	if (ball && !wormholeTeleportPending) {
 		ball.fadeOpacity = 1.0
 	}
 
@@ -1325,23 +1330,27 @@ function swapBushAndLightning() {
 	selectedForConversion = null
 }
 
-function swapBallAndMagnet() {
-	if (!magnet) return
+function swapBallAndWormhole(wormholeIndex) {
+	if (!wormhole || wormhole.length === 0) return
+	
+	// Swap with specified wormhole
+	let wh = wormhole[wormholeIndex]
+	if (!wh) return
 	
 	let ballX = ball.xPos
 	let ballY = ball.yPos
-	let magnetX = magnet.xPos
-	let magnetY = magnet.yPos
+	let whX = wh.xPos
+	let whY = wh.yPos
 	
 	// Swap positions
-	ball.xPos = magnetX
-	ball.yPos = magnetY
-	magnet.xPos = ballX
-	magnet.yPos = ballY
+	ball.xPos = whX
+	ball.yPos = whY
+	wh.xPos = ballX
+	wh.yPos = ballY
 	
-	// Ensure magnet is instantly visible
-	magnet.fadeInOpacity = 1.0
-	magnet.fadeInStartTime = Date.now()
+	// Ensure wormhole is instantly visible
+	wh.fadeInOpacity = 1.0
+	wh.fadeInStartTime = Date.now()
 	
 	// Reset ball velocity when swapping
 	ball.xVel = 0
@@ -1351,11 +1360,15 @@ function swapBallAndMagnet() {
 	selectedForConversion = null
 }
 
-function swapMagnetAndTarget(targetIndex) {
-	if (!magnet) return
+function swapWormholeAndTarget(targetIndex, wormholeIndex) {
+	if (!wormhole || wormhole.length === 0) return
 	
-	let magnetX = magnet.xPos
-	let magnetY = magnet.yPos
+	// Swap with specified wormhole
+	let wh = wormhole[wormholeIndex]
+	if (!wh) return
+	
+	let whX = wh.xPos
+	let whY = wh.yPos
 	let target = targetsRemaining[targetIndex]
 	let targetX = target.xPos
 	let targetY = target.yPos
@@ -1374,159 +1387,212 @@ function swapMagnetAndTarget(targetIndex) {
 	}
 	
 	// Swap positions
-	magnet.xPos = targetX
-	magnet.yPos = targetY
-	target.xPos = magnetX
-	target.yPos = magnetY
+	wh.xPos = targetX
+	wh.yPos = targetY
+	target.xPos = whX
+	target.yPos = whY
 	if (targetInTargets) {
-		targetInTargets.xPos = magnetX
-		targetInTargets.yPos = magnetY
+		targetInTargets.xPos = whX
+		targetInTargets.yPos = whY
 	}
 	
 	// Ensure items are instantly visible
-	magnet.fadeInOpacity = 1.0
-	magnet.fadeInStartTime = Date.now()
+	wh.fadeInOpacity = 1.0
+	wh.fadeInStartTime = Date.now()
 	target.fadeInOpacity = 1.0
 	target.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
 
-function swapMagnetAndObstacle(obstacleIndex) {
-	if (!magnet) return
+function swapWormholeAndObstacle(obstacleIndex, wormholeIndex) {
+	if (!wormhole || wormhole.length === 0) return
 	
-	let magnetX = magnet.xPos
-	let magnetY = magnet.yPos
+	// Swap with specified wormhole
+	let wh = wormhole[wormholeIndex]
+	if (!wh) return
+	
+	let whX = wh.xPos
+	let whY = wh.yPos
 	let obstacle = obstacles[obstacleIndex]
 	let obstacleX = obstacle.xPos
 	let obstacleY = obstacle.yPos
 	
 	// Swap positions
-	magnet.xPos = obstacleX
-	magnet.yPos = obstacleY
-	obstacle.xPos = magnetX
-	obstacle.yPos = magnetY
+	wh.xPos = obstacleX
+	wh.yPos = obstacleY
+	obstacle.xPos = whX
+	obstacle.yPos = whY
 	
 	// Ensure items are instantly visible
-	magnet.fadeInOpacity = 1.0
-	magnet.fadeInStartTime = Date.now()
+	wh.fadeInOpacity = 1.0
+	wh.fadeInStartTime = Date.now()
 	obstacle.fadeInOpacity = 1.0
 	obstacle.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
 
-function swapMagnetAndStar() {
-	if (!magnet || !star) return
+function swapWormholeAndStar(wormholeIndex) {
+	if (!wormhole || wormhole.length === 0 || !star) return
 	
-	let magnetX = magnet.xPos
-	let magnetY = magnet.yPos
+	// Swap with specified wormhole
+	let wh = wormhole[wormholeIndex]
+	if (!wh) return
+	
+	let whX = wh.xPos
+	let whY = wh.yPos
 	let starX = star.xPos
 	let starY = star.yPos
 	
 	// Swap positions
-	magnet.xPos = starX
-	magnet.yPos = starY
-	star.xPos = magnetX
-	star.yPos = magnetY
+	wh.xPos = starX
+	wh.yPos = starY
+	star.xPos = whX
+	star.yPos = whY
 	
 	// Ensure items are instantly visible
-	magnet.fadeInOpacity = 1.0
-	magnet.fadeInStartTime = Date.now()
+	wh.fadeInOpacity = 1.0
+	wh.fadeInStartTime = Date.now()
 	star.fadeInOpacity = 1.0
 	star.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
 
-function swapMagnetAndSwitcher() {
-	if (!magnet || !switcher) return
+function swapWormholeAndSwitcher(wormholeIndex) {
+	if (!wormhole || wormhole.length === 0 || !switcher) return
 	
-	let magnetX = magnet.xPos
-	let magnetY = magnet.yPos
+	// Swap with specified wormhole
+	let wh = wormhole[wormholeIndex]
+	if (!wh) return
+	
+	let whX = wh.xPos
+	let whY = wh.yPos
 	let switcherX = switcher.xPos
 	let switcherY = switcher.yPos
 	
 	// Swap positions
-	magnet.xPos = switcherX
-	magnet.yPos = switcherY
-	switcher.xPos = magnetX
-	switcher.yPos = magnetY
+	wh.xPos = switcherX
+	wh.yPos = switcherY
+	switcher.xPos = whX
+	switcher.yPos = whY
 	
 	// Ensure items are instantly visible
-	magnet.fadeInOpacity = 1.0
-	magnet.fadeInStartTime = Date.now()
+	wh.fadeInOpacity = 1.0
+	wh.fadeInStartTime = Date.now()
 	switcher.fadeInOpacity = 1.0
 	switcher.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
 
-function swapMagnetAndCross() {
-	if (!magnet || !cross) return
+function swapWormholeAndCross(wormholeIndex) {
+	if (!wormhole || wormhole.length === 0 || !cross) return
 	
-	let magnetX = magnet.xPos
-	let magnetY = magnet.yPos
+	// Swap with specified wormhole
+	let wh = wormhole[wormholeIndex]
+	if (!wh) return
+	
+	let whX = wh.xPos
+	let whY = wh.yPos
 	let crossX = cross.xPos
 	let crossY = cross.yPos
 	
 	// Swap positions
-	magnet.xPos = crossX
-	magnet.yPos = crossY
-	cross.xPos = magnetX
-	cross.yPos = magnetY
+	wh.xPos = crossX
+	wh.yPos = crossY
+	cross.xPos = whX
+	cross.yPos = whY
 	
 	// Ensure items are instantly visible
-	magnet.fadeInOpacity = 1.0
-	magnet.fadeInStartTime = Date.now()
+	wh.fadeInOpacity = 1.0
+	wh.fadeInStartTime = Date.now()
 	cross.fadeInOpacity = 1.0
 	cross.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
 
-function swapMagnetAndLightning() {
-	if (!magnet || !lightning) return
+function swapWormholeAndLightning(wormholeIndex) {
+	if (!wormhole || wormhole.length === 0 || !lightning) return
 	
-	let magnetX = magnet.xPos
-	let magnetY = magnet.yPos
+	// Swap with specified wormhole
+	let wh = wormhole[wormholeIndex]
+	if (!wh) return
+	
+	let whX = wh.xPos
+	let whY = wh.yPos
 	let lightningX = lightning.xPos
 	let lightningY = lightning.yPos
 	
 	// Swap positions
-	magnet.xPos = lightningX
-	magnet.yPos = lightningY
-	lightning.xPos = magnetX
-	lightning.yPos = magnetY
+	wh.xPos = lightningX
+	wh.yPos = lightningY
+	lightning.xPos = whX
+	lightning.yPos = whY
 	
 	// Ensure items are instantly visible
-	magnet.fadeInOpacity = 1.0
-	magnet.fadeInStartTime = Date.now()
+	wh.fadeInOpacity = 1.0
+	wh.fadeInStartTime = Date.now()
 	lightning.fadeInOpacity = 1.0
 	lightning.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
 
-function swapMagnetAndBush() {
-	if (!magnet || !bush) return
+function swapWormholeAndBush(wormholeIndex) {
+	if (!wormhole || wormhole.length === 0 || !bush) return
 	
-	let magnetX = magnet.xPos
-	let magnetY = magnet.yPos
+	// Swap with specified wormhole
+	let wh = wormhole[wormholeIndex]
+	if (!wh) return
+	
+	let whX = wh.xPos
+	let whY = wh.yPos
 	let bushX = bush.xPos
 	let bushY = bush.yPos
 	
 	// Swap positions
-	magnet.xPos = bushX
-	magnet.yPos = bushY
-	bush.xPos = magnetX
-	bush.yPos = magnetY
+	wh.xPos = bushX
+	wh.yPos = bushY
+	bush.xPos = whX
+	bush.yPos = whY
 	
 	// Ensure items are instantly visible
-	magnet.fadeInOpacity = 1.0
-	magnet.fadeInStartTime = Date.now()
+	wh.fadeInOpacity = 1.0
+	wh.fadeInStartTime = Date.now()
 	bush.fadeInOpacity = 1.0
 	bush.fadeInStartTime = Date.now()
+	
+	selectedForConversion = null
+}
+
+function swapWormholeAndWormhole(wormholeIndex1, wormholeIndex2) {
+	if (!wormhole || wormhole.length === 0) return
+	if (wormholeIndex1 === wormholeIndex2) return
+	
+	// Swap positions between two wormholes
+	let wh1 = wormhole[wormholeIndex1]
+	let wh2 = wormhole[wormholeIndex2]
+	if (!wh1 || !wh2) return
+	
+	let wh1X = wh1.xPos
+	let wh1Y = wh1.yPos
+	let wh2X = wh2.xPos
+	let wh2Y = wh2.yPos
+	
+	// Swap positions
+	wh1.xPos = wh2X
+	wh1.yPos = wh2Y
+	wh2.xPos = wh1X
+	wh2.yPos = wh1Y
+	
+	// Ensure wormholes are instantly visible
+	wh1.fadeInOpacity = 1.0
+	wh1.fadeInStartTime = Date.now()
+	wh2.fadeInOpacity = 1.0
+	wh2.fadeInStartTime = Date.now()
 	
 	selectedForConversion = null
 }
@@ -1618,9 +1684,9 @@ function handleTouchstart(e) {
 				// Second tap: we have a bush selected, now tapping star - swap positions
 				swapBushAndStar()
 				return
-			} else if (selectedForConversion && selectedForConversion.type === 'magnet') {
-				// Second tap: we have a cannon selected, now tapping star - swap positions
-				swapMagnetAndStar()
+			} else if (selectedForConversion && selectedForConversion.type === 'wormhole') {
+				// Second tap: we have a wormhole selected, now tapping star - swap positions
+				swapWormholeAndStar(selectedForConversion.index)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
 				// Second tap: we have a ball selected, now tapping star - swap positions
@@ -1662,9 +1728,9 @@ function handleTouchstart(e) {
 				// Second tap: we have a bush selected, now tapping cross - swap positions
 				swapBushAndCross()
 				return
-			} else if (selectedForConversion && selectedForConversion.type === 'magnet') {
-				// Second tap: we have a cannon selected, now tapping cross - swap positions
-				swapMagnetAndCross()
+			} else if (selectedForConversion && selectedForConversion.type === 'wormhole') {
+				// Second tap: we have a wormhole selected, now tapping cross - swap positions
+				swapWormholeAndCross(selectedForConversion.index)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
 				// Second tap: we have a ball selected, now tapping cross - swap positions
@@ -1706,9 +1772,9 @@ function handleTouchstart(e) {
 				// Second tap: we have a bush selected, now tapping switcher - swap positions
 				swapBushAndSwitcher()
 				return
-			} else if (selectedForConversion && selectedForConversion.type === 'magnet') {
-				// Second tap: we have a cannon selected, now tapping switcher - swap positions
-				swapMagnetAndSwitcher()
+			} else if (selectedForConversion && selectedForConversion.type === 'wormhole') {
+				// Second tap: we have a wormhole selected, now tapping switcher - swap positions
+				swapWormholeAndSwitcher(selectedForConversion.index)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
 				// Second tap: we have a ball selected, now tapping switcher - swap positions
@@ -1750,9 +1816,9 @@ function handleTouchstart(e) {
 				// Second tap: we have a bush selected, now tapping lightning - swap positions
 				swapBushAndLightning()
 				return
-			} else if (selectedForConversion && selectedForConversion.type === 'magnet') {
-				// Second tap: we have a cannon selected, now tapping lightning - swap positions
-				swapMagnetAndLightning()
+			} else if (selectedForConversion && selectedForConversion.type === 'wormhole') {
+				// Second tap: we have a wormhole selected, now tapping lightning - swap positions
+				swapWormholeAndLightning(selectedForConversion.index)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
 				// Second tap: we have a ball selected, now tapping lightning - swap positions
@@ -1806,46 +1872,56 @@ function handleTouchstart(e) {
 		}
 	}
 	
-	// Check if tapping on a magnet (check before obstacles/targets to prioritize)
-	if (magnet) {
-		let magnetDistance = Math.hypot(touch1.xPos - magnet.xPos, touch1.yPos - magnet.yPos)
-		if (magnetDistance < magnet.radius + TOUCH_TOLERANCE) {
-			if (selectedForConversion && selectedForConversion.type === 'target') {
-				// Second tap: we have a target selected, now tapping magnet - swap positions
-				swapMagnetAndTarget(selectedForConversion.index)
-				return
-			} else if (selectedForConversion && selectedForConversion.type === 'obstacle') {
-				// Second tap: we have an obstacle selected, now tapping cannon - swap positions
-				swapMagnetAndObstacle(selectedForConversion.index)
-				return
-			} else if (selectedForConversion && selectedForConversion.type === 'star') {
-				// Second tap: we have a star selected, now tapping cannon - swap positions
-				swapMagnetAndStar()
-				return
-			} else if (selectedForConversion && selectedForConversion.type === 'switcher') {
-				// Second tap: we have a switcher selected, now tapping cannon - swap positions
-				swapMagnetAndSwitcher()
-				return
-			} else if (selectedForConversion && selectedForConversion.type === 'cross') {
-				// Second tap: we have a cross selected, now tapping cannon - swap positions
-				swapMagnetAndCross()
-				return
-			} else if (selectedForConversion && selectedForConversion.type === 'lightning') {
-				// Second tap: we have a lightning selected, now tapping cannon - swap positions
-				swapMagnetAndLightning()
-				return
-			} else if (selectedForConversion && selectedForConversion.type === 'bush') {
-				// Second tap: we have a bush selected, now tapping cannon - swap positions
-				swapMagnetAndBush()
-				return
-			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
-				// Second tap: we have a ball selected, now tapping cannon - swap positions
-				swapBallAndMagnet()
-				return
-			} else {
-				// First tap: select this cannon
-				selectedForConversion = { type: 'magnet', index: 0 }
-				return
+	// Check if tapping on a wormhole (check before obstacles/targets to prioritize)
+	if (wormhole && wormhole.length > 0) {
+		// Check both wormholes
+		for (let i = 0; i < wormhole.length; i++) {
+			let wh = wormhole[i]
+			if (!wh) continue
+			
+			let whDistance = Math.hypot(touch1.xPos - wh.xPos, touch1.yPos - wh.yPos)
+			if (whDistance < wh.radius + TOUCH_TOLERANCE) {
+				if (selectedForConversion && selectedForConversion.type === 'target') {
+					// Second tap: we have a target selected, now tapping wormhole - swap positions with this wormhole
+					swapWormholeAndTarget(selectedForConversion.index, i)
+					return
+				} else if (selectedForConversion && selectedForConversion.type === 'obstacle') {
+					// Second tap: we have an obstacle selected, now tapping wormhole - swap positions
+					swapWormholeAndObstacle(selectedForConversion.index, i)
+					return
+				} else if (selectedForConversion && selectedForConversion.type === 'star') {
+					// Second tap: we have a star selected, now tapping wormhole - swap positions
+					swapWormholeAndStar(i)
+					return
+				} else if (selectedForConversion && selectedForConversion.type === 'switcher') {
+					// Second tap: we have a switcher selected, now tapping wormhole - swap positions
+					swapWormholeAndSwitcher(i)
+					return
+				} else if (selectedForConversion && selectedForConversion.type === 'cross') {
+					// Second tap: we have a cross selected, now tapping wormhole - swap positions
+					swapWormholeAndCross(i)
+					return
+				} else if (selectedForConversion && selectedForConversion.type === 'lightning') {
+					// Second tap: we have a lightning selected, now tapping wormhole - swap positions
+					swapWormholeAndLightning(i)
+					return
+				} else if (selectedForConversion && selectedForConversion.type === 'bush') {
+					// Second tap: we have a bush selected, now tapping wormhole - swap positions
+					swapWormholeAndBush(i)
+					return
+				} else if (selectedForConversion && selectedForConversion.type === 'ball') {
+					// Second tap: we have a ball selected, now tapping wormhole - swap positions
+					swapBallAndWormhole(i)
+					return
+				} else if (selectedForConversion && selectedForConversion.type === 'wormhole') {
+					// Second tap: we have another wormhole selected, now tapping this wormhole - swap positions
+					swapWormholeAndWormhole(selectedForConversion.index, i)
+					return
+				} else {
+					// First tap: select this specific wormhole
+					selectedForConversion = { type: 'wormhole', index: i }
+					return
+				}
 			}
 		}
 	}
@@ -1884,9 +1960,9 @@ function handleTouchstart(e) {
 				// Second tap: we have a bush selected, now tapping obstacle - swap positions
 				swapBushAndObstacle(i)
 				return
-			} else if (selectedForConversion && selectedForConversion.type === 'magnet') {
-				// Second tap: we have a cannon selected, now tapping obstacle - swap positions
-				swapMagnetAndObstacle(i)
+			} else if (selectedForConversion && selectedForConversion.type === 'wormhole') {
+				// Second tap: we have a wormhole selected, now tapping obstacle - swap positions
+				swapWormholeAndObstacle(i, selectedForConversion.index)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
 				// Second tap: we have a ball selected, now tapping obstacle - swap positions
@@ -1934,6 +2010,10 @@ function handleTouchstart(e) {
 			} else if (selectedForConversion && selectedForConversion.type === 'bush') {
 				// Second tap: we have a bush selected, now tapping target - swap positions
 				swapBushAndTarget(i)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'wormhole') {
+				// Second tap: we have a wormhole selected, now tapping target - swap positions
+				swapWormholeAndTarget(i, selectedForConversion.index)
 				return
 			} else if (selectedForConversion && selectedForConversion.type === 'ball') {
 				// Second tap: we have a ball selected, now tapping target - swap positions
@@ -1985,8 +2065,8 @@ function handleTouchstart(e) {
 			} else if (selectedForConversion.type === 'bush') {
 				swapBallAndBush()
 				return
-			} else if (selectedForConversion.type === 'magnet') {
-				swapBallAndMagnet()
+			} else if (selectedForConversion.type === 'wormhole') {
+				swapBallAndWormhole(selectedForConversion.index)
 				return
 			}
 		}
@@ -3016,147 +3096,148 @@ function placeBush() {
 	}
 }
 
-function placeMagnet() {
-	let magnetRadius = getBallRadius() // Same size as ball
+function placeWormholes() {
+	let wormholeRadius = getBallRadius() // Same size as ball
 	let ballRadius = getBallRadius()
 	let targetRadius = getTargetRadius()
 	let minSeparation = 5
 	let maxAttempts = 100
-	// No exclusion zone - score and buttons are disabled
 	let topExclusionZone = 0
-	// Keep magnet away from the very bottom: never within 4 grey-ball
-	// diameters of the bottom edge.
 	let bottomExclusion = 8 * ballRadius // 4 * (2 * ballRadius)
-	let attempts = 0
-	let xPos, yPos
-	let validPosition = false
+	let minWormholeDistance = Math.min(canvas.width, canvas.height) * 0.3 // Minimum distance between wormholes
 	
-	while (!validPosition && attempts < maxAttempts) {
-		// Ensure magnet is fully within canvas bounds, and not too close
-		// to the bottom edge.
-		xPos = magnetRadius + (canvas.width - 2 * magnetRadius) * Math.random()
-		// Exclude top area unless high level, and also exclude a band
-		// near the bottom based on grey ball size.
-		let minY = magnetRadius + topExclusionZone
-		let maxY = canvas.height - Math.max(magnetRadius, bottomExclusion)
-		yPos = minY + (maxY - minY) * Math.random()
-		validPosition = true
-		
+	// Helper function to check if a position is valid for a wormhole
+	function isValidPosition(x, y, radius, excludeWormholes = []) {
 		// Check if overlaps with score
-		if (overlapsWithScore(xPos, yPos, magnetRadius)) {
-			validPosition = false
+		if (overlapsWithScore(x, y, radius)) {
+			return false
 		}
 		
 		// Check distance from ball
-		let dx = xPos - ball.xPos
-		let dy = yPos - ball.yPos
+		let dx = x - ball.xPos
+		let dy = y - ball.yPos
 		let distance = Math.hypot(dx, dy)
-		let minDistance = magnetRadius + ballRadius + minSeparation
+		let minDistance = radius + ballRadius + minSeparation
 		if (distance < minDistance) {
-			validPosition = false
+			return false
 		}
 		
 		// Check distance from targets
-		if (validPosition) {
-			for (let j = 0; j < targets.length; j++) {
-				let dx2 = xPos - targets[j].xPos
-				let dy2 = yPos - targets[j].yPos
-				let distance2 = Math.hypot(dx2, dy2)
-				let minDistance2 = magnetRadius + targetRadius + minSeparation
-				if (distance2 < minDistance2) {
-					validPosition = false
-					break
-				}
+		for (let j = 0; j < targets.length; j++) {
+			let dx2 = x - targets[j].xPos
+			let dy2 = y - targets[j].yPos
+			let distance2 = Math.hypot(dx2, dy2)
+			let minDistance2 = radius + targetRadius + minSeparation
+			if (distance2 < minDistance2) {
+				return false
 			}
 		}
 		
 		// Check distance from obstacles
-		if (validPosition) {
-			for (let j = 0; j < obstacles.length; j++) {
-				let dx3 = xPos - obstacles[j].xPos
-				let dy3 = yPos - obstacles[j].yPos
-				let distance3 = Math.hypot(dx3, dy3)
-				let minDistance3 = magnetRadius + obstacles[j].radius + minSeparation
-				if (distance3 < minDistance3) {
-					validPosition = false
-					break
+		for (let j = 0; j < obstacles.length; j++) {
+			let dx3 = x - obstacles[j].xPos
+			let dy3 = y - obstacles[j].yPos
+			let distance3 = Math.hypot(dx3, dy3)
+			let minDistance3 = radius + obstacles[j].radius + minSeparation
+			if (distance3 < minDistance3) {
+				return false
+			}
+		}
+		
+		// Check distance from other special items
+		let specialItems = [{item: star}, {item: switcher}, {item: cross}, {item: lightning}, {item: bush}]
+		for (let special of specialItems) {
+			if (special.item) {
+				let dx4 = x - special.item.xPos
+				let dy4 = y - special.item.yPos
+				let distance4 = Math.hypot(dx4, dy4)
+				let minDistance4 = radius + special.item.radius + minSeparation
+				if (distance4 < minDistance4) {
+					return false
 				}
 			}
 		}
 		
-		// Check distance from star if it exists
-		if (validPosition && star) {
-			let dx4 = xPos - star.xPos
-			let dy4 = yPos - star.yPos
-			let distance4 = Math.hypot(dx4, dy4)
-			let minDistance4 = magnetRadius + star.radius + minSeparation
-			if (distance4 < minDistance4) {
-				validPosition = false
-			}
-		}
-		
-		// Check distance from switcher if it exists
-		if (validPosition && switcher) {
-			let dx5 = xPos - switcher.xPos
-			let dy5 = yPos - switcher.yPos
+		// Check distance from other wormholes
+		for (let wh of excludeWormholes) {
+			let dx5 = x - wh.xPos
+			let dy5 = y - wh.yPos
 			let distance5 = Math.hypot(dx5, dy5)
-			let minDistance5 = magnetRadius + switcher.radius + minSeparation
-			if (distance5 < minDistance5) {
-				validPosition = false
+			if (distance5 < minWormholeDistance) {
+				return false
 			}
 		}
 		
-		// Check distance from cross if it exists
-		if (validPosition && cross) {
-			let dx6 = xPos - cross.xPos
-			let dy6 = yPos - cross.yPos
-			let distance6 = Math.hypot(dx6, dy6)
-			let minDistance6 = magnetRadius + cross.radius + minSeparation
-			if (distance6 < minDistance6) {
-				validPosition = false
-			}
-		}
+		return true
+	}
+	
+	// Place first wormhole
+	let attempts = 0
+	let xPos1, yPos1
+	let validPosition1 = false
+	
+	while (!validPosition1 && attempts < maxAttempts) {
+		xPos1 = wormholeRadius + (canvas.width - 2 * wormholeRadius) * Math.random()
+		let minY = wormholeRadius + topExclusionZone
+		let maxY = canvas.height - Math.max(wormholeRadius, bottomExclusion)
+		yPos1 = minY + (maxY - minY) * Math.random()
 		
-		// Check distance from lightning if it exists
-		if (validPosition && lightning) {
-			let dx7 = xPos - lightning.xPos
-			let dy7 = yPos - lightning.yPos
-			let distance7 = Math.hypot(dx7, dy7)
-			let minDistance7 = magnetRadius + lightning.radius + minSeparation
-			if (distance7 < minDistance7) {
-				validPosition = false
-			}
+		if (isValidPosition(xPos1, yPos1, wormholeRadius)) {
+			validPosition1 = true
 		}
-		
-		// Check distance from bush if it exists
-		if (validPosition && bush) {
-			let dx8 = xPos - bush.xPos
-			let dy8 = yPos - bush.yPos
-			let distance8 = Math.hypot(dx8, dy8)
-			let minDistance8 = magnetRadius + bush.radius + minSeparation
-			if (distance8 < minDistance8) {
-				validPosition = false
-			}
-		}
-		
 		attempts++
 	}
 	
-	// Fallback: ensure position is valid even if loop exhausted attempts
-	if (!validPosition) {
-		xPos = magnetRadius + (canvas.width - 2 * magnetRadius) * Math.random()
-		let minY = magnetRadius + topExclusionZone
-		let maxY = canvas.height - Math.max(magnetRadius, bottomExclusion)
-		yPos = minY + (maxY - minY) * Math.random()
+	// Fallback for first wormhole
+	if (!validPosition1) {
+		xPos1 = wormholeRadius + (canvas.width - 2 * wormholeRadius) * Math.random()
+		let minY = wormholeRadius + topExclusionZone
+		let maxY = canvas.height - Math.max(wormholeRadius, bottomExclusion)
+		yPos1 = minY + (maxY - minY) * Math.random()
 	}
 	
-	magnet = {
-		xPos: xPos,
-		yPos: yPos,
-		radius: magnetRadius,
-		fadeInOpacity: 0, // Start invisible for fade-in
-		fadeInStartTime: Date.now() + FADE_IN_DELAY // Delay before fade-in starts
+	let wormhole1 = {
+		xPos: xPos1,
+		yPos: yPos1,
+		radius: wormholeRadius,
+		fadeInOpacity: 0,
+		fadeInStartTime: Date.now() + FADE_IN_DELAY
 	}
+	
+	// Place second wormhole (must be at least minWormholeDistance away from first)
+	attempts = 0
+	let xPos2, yPos2
+	let validPosition2 = false
+	
+	while (!validPosition2 && attempts < maxAttempts) {
+		xPos2 = wormholeRadius + (canvas.width - 2 * wormholeRadius) * Math.random()
+		let minY = wormholeRadius + topExclusionZone
+		let maxY = canvas.height - Math.max(wormholeRadius, bottomExclusion)
+		yPos2 = minY + (maxY - minY) * Math.random()
+		
+		if (isValidPosition(xPos2, yPos2, wormholeRadius, [wormhole1])) {
+			validPosition2 = true
+		}
+		attempts++
+	}
+	
+	// Fallback for second wormhole
+	if (!validPosition2) {
+		xPos2 = wormholeRadius + (canvas.width - 2 * wormholeRadius) * Math.random()
+		let minY = wormholeRadius + topExclusionZone
+		let maxY = canvas.height - Math.max(wormholeRadius, bottomExclusion)
+		yPos2 = minY + (maxY - minY) * Math.random()
+	}
+	
+	let wormhole2 = {
+		xPos: xPos2,
+		yPos: yPos2,
+		radius: wormholeRadius,
+		fadeInOpacity: 0,
+		fadeInStartTime: Date.now() + FADE_IN_DELAY
+	}
+	
+	wormhole = [wormhole1, wormhole2]
 }
 
 function moveBall() {
@@ -3202,6 +3283,33 @@ function moveBall() {
 		return
 	}
 
+	// Check if ball is in transit through a wormhole
+	if (wormholeTeleportPending) {
+		// Keep ball hidden during transit
+		ball.fadeOpacity = 0
+		
+		let elapsed = Date.now() - wormholeTeleportPending.startTime
+		if (elapsed >= 500) {
+			// Half a second has passed - teleport the ball
+			ball.xPos = wormholeTeleportPending.destX
+			ball.yPos = wormholeTeleportPending.destY
+			ball.xVel = wormholeTeleportPending.xVel
+			ball.yVel = wormholeTeleportPending.yVel
+			ball.fadeOpacity = 1.0 // Make ball visible again
+			
+			// Ensure ball is still marked as being flung
+			if (wormholeTeleportPending.xVel !== 0 || wormholeTeleportPending.yVel !== 0) {
+				ball.isBeingFlung = true
+			}
+			
+			// Clear pending teleport
+			wormholeTeleportPending = null
+		} else {
+			// Still in transit - don't move the ball, keep it hidden
+			return
+		}
+	}
+
 	// Normal motion
 	ball.xPos += ball.xVel
 	ball.yPos += ball.yVel
@@ -3210,54 +3318,6 @@ function moveBall() {
 	ball.xVel *= FRICTION 
 	ball.yVel *= FRICTION
 
-	// If magnet effect is active, make ALL targets drift towards the ball
-	if (magnetEffectActive) {
-		let basePullStrength = 2.5 // Base strength of magnetic pull (made very visible)
-		
-		for (let i = 0; i < targetsRemaining.length; i++) {
-			let targetRemaining = targetsRemaining[i]
-			let dx = ball.xPos - targetRemaining.xPos
-			let dy = ball.yPos - targetRemaining.yPos
-			let distance = Math.hypot(dx, dy)
-			
-			// All targets drift towards ball (stronger when closer)
-			if (distance > 0) {
-				// Normalize direction
-				let dirX = dx / distance
-				let dirY = dy / distance
-				
-				// Calculate pull strength - stronger when closer, but always active
-				// Use a simple inverse distance formula for more visible effect
-				let maxDistance = Math.max(canvas.width, canvas.height)
-				let pullStrength = basePullStrength * (1 / (1 + distance / (maxDistance * 0.2)))
-				
-				// Apply drift to targetRemaining
-				targetRemaining.xPos += dirX * pullStrength
-				targetRemaining.yPos += dirY * pullStrength
-				
-				// Update corresponding target in targets array by matching position (with larger tolerance)
-				// Try to match by finding the closest target
-				let bestMatch = null
-				let bestMatchDist = Infinity
-				for (let j = 0; j < targets.length; j++) {
-					let dist = Math.hypot(
-						targets[j].xPos - targetRemaining.xPos,
-						targets[j].yPos - targetRemaining.yPos
-					)
-					if (dist < bestMatchDist && dist < 100) { // Even larger tolerance for matching after drift
-						bestMatchDist = dist
-						bestMatch = j
-					}
-				}
-				
-				// If we found a match, update it
-				if (bestMatch !== null) {
-					targets[bestMatch].xPos = targetRemaining.xPos
-					targets[bestMatch].yPos = targetRemaining.yPos
-				}
-			}
-		}
-	}
 
 	// If a shot is in progress, the ball has effectively stopped (after the fling),
 	// and we still have targets remaining, start a quick animated reset of this
@@ -3365,12 +3425,18 @@ function moveBall() {
 			} else {
 				bush = null
 			}
-			if (savedMagnet) {
-				magnet = JSON.parse(JSON.stringify(savedMagnet))
-				magnet.fadeInOpacity = 0
-				magnet.fadeInStartTime = autoResetStartTime
+			if (savedWormhole) {
+				wormhole = savedWormhole ? JSON.parse(JSON.stringify(savedWormhole)) : null
+				if (wormhole && wormhole.length > 0) {
+					for (let i = 0; i < wormhole.length; i++) {
+						if (wormhole[i]) {
+							wormhole[i].fadeInOpacity = 0
+							wormhole[i].fadeInStartTime = autoResetStartTime
+						}
+					}
+				}
 			} else {
-				magnet = null
+				wormhole = null
 			}
 			// Reset lightning, bush, and cannon effects
 			lightningEffectActive = false
@@ -3432,8 +3498,8 @@ function willClearAllTargetsOnCurrentPath() {
 
 function handleCollision() {
 	// While the ball is animating into its new starting spot OR auto-resetting a failed shot,
-	// ignore collisions so nothing interferes with these animations.
-	if (ball && (ball.isSpawningToStart || autoResetActive)) {
+	// OR in transit through a wormhole, ignore collisions so nothing interferes with these animations.
+	if (ball && (ball.isSpawningToStart || autoResetActive || wormholeTeleportPending)) {
 		return
 	}
 	handleCollisionWithTarget()
@@ -3444,7 +3510,7 @@ function handleCollision() {
 	handleCollisionWithCross()
 	handleCollisionWithLightning()
 	handleCollisionWithBush()
-	handleCollisionWithMagnet()
+	handleCollisionWithWormhole()
 	handleCollisionWithTrophy()
 }
 
@@ -3823,7 +3889,6 @@ function handleCollisionWithLightning() {
 	if (distance < collisionDistance && distance > 0) {
 		// Clear any existing special item effects
 		bushEffectActive = false
-		magnetEffectActive = false
 		ballStoppedByBushEffect = false
 		
 		// Ball hit the lightning - activate pass-through for the rest of the try
@@ -3846,7 +3911,6 @@ function handleCollisionWithBush() {
 	if (distance < collisionDistance && distance > 0) {
 		// Clear any existing special item effects
 		lightningEffectActive = false
-		magnetEffectActive = false
 		ballStoppedByBushEffect = false
 		
 		// Ball hit the bush - activate green border effect and stop the ball
@@ -3863,26 +3927,93 @@ function handleCollisionWithBush() {
 	}
 }
 
-function handleCollisionWithMagnet() {
-	if (!magnet) return
+function handleCollisionWithWormhole() {
+	if (!wormhole || wormhole.length !== 2) return
+	
+	// If ball is already in transit through a wormhole, ignore collisions
+	if (wormholeTeleportPending) {
+		return
+	}
+	
+	let currentTime = Date.now()
+	
+	// Check if wormholes are disabled (2 seconds after last use)
+	if (currentTime < wormholeDisabledUntil) {
+		return
+	}
+	
+	// Check cooldown - prevent immediate re-teleportation
+	if (currentTime - wormholeLastTeleportTime < wormholeCooldown) {
+		return
+	}
 	
 	let ballRadius = getBallRadius()
-	let dx = ball.xPos - magnet.xPos
-	let dy = ball.yPos - magnet.yPos
-	let distance = Math.hypot(dx, dy)
-	let collisionDistance = ballRadius + magnet.radius
 	
-	if (distance < collisionDistance && distance > 0) {
-		// Clear any existing special item effects
-		lightningEffectActive = false
-		bushEffectActive = false
-		ballStoppedByBushEffect = false
+	// Check collision with both wormholes
+	for (let i = 0; i < wormhole.length; i++) {
+		let wh = wormhole[i]
+		if (!wh) continue
 		
-		// Ball hit the magnet - activate purple border and magnet effect for duration of try
-		magnetEffectActive = true
+		let dx = ball.xPos - wh.xPos
+		let dy = ball.yPos - wh.yPos
+		let distance = Math.hypot(dx, dy)
+		let collisionDistance = ballRadius + wh.radius
 		
-		// Remove the magnet
-		magnet = null
+		if (distance < collisionDistance && distance > 0) {
+			// Clear any existing special item effects
+			lightningEffectActive = false
+			bushEffectActive = false
+			ballStoppedByBushEffect = false
+			
+			// Find the other wormhole
+			let otherWormhole = wormhole[1 - i]
+			
+			if (otherWormhole) {
+				// Save the ball's current velocity before teleporting
+				let savedXVel = ball.xVel
+				let savedYVel = ball.yVel
+				
+				// Calculate direction vector from velocity (normalized)
+				let speed = Math.hypot(savedXVel, savedYVel)
+				let offsetDistance = ballRadius + otherWormhole.radius + 5 // Small buffer
+				
+				let destX, destY
+				if (speed > 0) {
+					// Offset in direction of velocity to place ball just outside collision radius
+					let dirX = savedXVel / speed
+					let dirY = savedYVel / speed
+					destX = otherWormhole.xPos + dirX * offsetDistance
+					destY = otherWormhole.yPos + dirY * offsetDistance
+				} else {
+					// If no velocity, just place it at wormhole position (shouldn't happen normally)
+					destX = otherWormhole.xPos
+					destY = otherWormhole.yPos
+				}
+				
+				// Hide the ball and store teleport info for delayed teleportation
+				ball.fadeOpacity = 0 // Hide ball during transit
+				ball.xVel = 0 // Stop movement during transit
+				ball.yVel = 0
+				
+				// Store teleport destination info
+				wormholeTeleportPending = {
+					startTime: currentTime,
+					destX: destX,
+					destY: destY,
+					xVel: savedXVel,
+					yVel: savedYVel
+				}
+				
+				// Set cooldown to prevent immediate re-teleportation
+				wormholeLastTeleportTime = currentTime
+				
+				// Disable both wormholes for 2 seconds after use
+				wormholeDisabledUntil = currentTime + 2000
+			}
+			
+			// Don't remove wormholes - they can be used multiple times
+			break
+		}
 	}
 }
 
@@ -3925,15 +4056,24 @@ function draw() {
 		let elapsed = Date.now() - initialIntroStartTime
 		let fadeDuration = FADE_DURATION
 		let t = Math.min(1.0, Math.max(0.0, elapsed / fadeDuration))
-		ball.fadeOpacity = t
+		// Keep ball hidden if it's in transit through a wormhole
+		if (!wormholeTeleportPending) {
+			ball.fadeOpacity = t
+		}
 		
 		if (t >= 1.0) {
 			initialIntroActive = false
-			ball.fadeOpacity = 1.0
+			// Keep ball hidden if it's in transit through a wormhole
+			if (!wormholeTeleportPending) {
+				ball.fadeOpacity = 1.0
+			}
 		}
 	} else {
 		// Ensure ball is fully visible after the intro
-		ball.fadeOpacity = 1.0
+		// But keep it hidden if it's in transit through a wormhole
+		if (!wormholeTeleportPending) {
+			ball.fadeOpacity = 1.0
+		}
 	}
 	
 	// Update fade-in for targets
@@ -3986,7 +4126,7 @@ function draw() {
 	drawCross()
 	drawLightning()
 	drawBush()
-	drawMagnet()
+	drawWormholes()
 	
 	// Draw ball after targets and obstacles so it appears on top
 	drawBall()
@@ -4186,14 +4326,6 @@ function drawBall() {
 		ctx.stroke()
 	}
 	
-	// Draw purple border if magnet effect is active
-	if (magnetEffectActive) {
-		ctx.strokeStyle = "#8844aa"
-		ctx.lineWidth = radius * 0.15
-		ctx.beginPath()
-		ctx.arc(x, y, radius, 0, 2 * Math.PI)
-		ctx.stroke()
-	}
 
 	ctx.restore()
 }
@@ -4333,89 +4465,70 @@ function drawBush() {
 	ctx.restore()
 }
 
-function drawMagnet() {
-	if (!magnet) return
+function drawWormholes() {
+	if (!wormhole || wormhole.length !== 2) return
 	
-	let radius = magnet.radius
-	let x = magnet.xPos
-	let y = magnet.yPos
-	
-	// Initialize fade-in if missing
-	if (magnet.fadeInOpacity === undefined || magnet.fadeInStartTime === undefined) {
-		magnet.fadeInOpacity = 0
-		magnet.fadeInStartTime = Date.now() + FADE_IN_DELAY
-	}
-	
-	// Update fade-in only if start time has passed
-	if (magnet.fadeInOpacity < 1.0 && magnet.fadeInStartTime <= Date.now()) {
-		let elapsed = Date.now() - magnet.fadeInStartTime
-		let fadeDuration = FADE_DURATION
-		magnet.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
-	}
-	
-	let opacity = Math.max(0, Math.min(1.0, magnet.fadeInOpacity !== undefined ? magnet.fadeInOpacity : 0))
-	
-	ctx.save()
-	ctx.globalAlpha = opacity
-	
-	// Draw classic horseshoe/U-shaped magnet
-	let magnetSize = radius * 1.2
-	let poleWidth = radius * 0.5
-	let poleHeight = radius * 0.8
-	let gapWidth = radius * 0.3
-	let cornerRadius = poleWidth * 0.2
-	
-	// Helper function to draw rounded rectangle
-	function drawRoundedRect(x, y, width, height, radius) {
+	// Draw both wormholes
+	for (let i = 0; i < wormhole.length; i++) {
+		let wh = wormhole[i]
+		if (!wh) continue
+		
+		let radius = wh.radius
+		let x = wh.xPos
+		let y = wh.yPos
+		
+		// Initialize fade-in if missing
+		if (wh.fadeInOpacity === undefined || wh.fadeInStartTime === undefined) {
+			wh.fadeInOpacity = 0
+			wh.fadeInStartTime = Date.now() + FADE_IN_DELAY
+		}
+		
+		// Update fade-in only if start time has passed
+		if (wh.fadeInOpacity < 1.0 && wh.fadeInStartTime <= Date.now()) {
+			let elapsed = Date.now() - wh.fadeInStartTime
+			let fadeDuration = FADE_DURATION
+			wh.fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
+		}
+		
+		let opacity = Math.max(0, Math.min(1.0, wh.fadeInOpacity !== undefined ? wh.fadeInOpacity : 0))
+		
+		ctx.save()
+		ctx.globalAlpha = opacity
+		
+		// Draw wormhole as a purple portal/ring
+		// Outer ring - darker purple
 		ctx.beginPath()
-		ctx.moveTo(x + radius, y)
-		ctx.lineTo(x + width - radius, y)
-		ctx.quadraticCurveTo(x + width, y, x + width, y + radius)
-		ctx.lineTo(x + width, y + height - radius)
-		ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height)
-		ctx.lineTo(x + radius, y + height)
-		ctx.quadraticCurveTo(x, y + height, x, y + height - radius)
-		ctx.lineTo(x, y + radius)
-		ctx.quadraticCurveTo(x, y, x + radius, y)
-		ctx.closePath()
+		ctx.arc(x, y, radius, 0, 2 * Math.PI)
+		ctx.fillStyle = "#663388"
+		ctx.fill()
+		
+		// Middle ring - medium purple
+		ctx.beginPath()
+		ctx.arc(x, y, radius * 0.85, 0, 2 * Math.PI)
+		ctx.fillStyle = "#8844aa"
+		ctx.fill()
+		
+		// Inner ring - brighter purple
+		ctx.beginPath()
+		ctx.arc(x, y, radius * 0.7, 0, 2 * Math.PI)
+		ctx.fillStyle = "#aa55bb"
+		ctx.fill()
+		
+		// Center - black (portal opening)
+		ctx.beginPath()
+		ctx.arc(x, y, radius * 0.5, 0, 2 * Math.PI)
+		ctx.fillStyle = "#000000"
+		ctx.fill()
+		
+		// Outer border
+		ctx.beginPath()
+		ctx.arc(x, y, radius, 0, 2 * Math.PI)
+		ctx.strokeStyle = "#8844aa"
+		ctx.lineWidth = 2
+		ctx.stroke()
+		
+		ctx.restore()
 	}
-	
-	// Left pole (N) - brighter purple
-	ctx.fillStyle = "#aa55bb"
-	drawRoundedRect(x - magnetSize / 2, y - poleHeight / 2, poleWidth, poleHeight, cornerRadius)
-	ctx.fill()
-	
-	// Right pole (S) - darker purple
-	ctx.fillStyle = "#7744aa"
-	drawRoundedRect(x + magnetSize / 2 - poleWidth, y - poleHeight / 2, poleWidth, poleHeight, cornerRadius)
-	ctx.fill()
-	
-	// Top connecting bar (U-shape top)
-	ctx.fillStyle = "#8844aa"
-	drawRoundedRect(x - magnetSize / 2, y - poleHeight / 2 - poleWidth * 0.3, magnetSize, poleWidth * 0.6, cornerRadius)
-	ctx.fill()
-	
-	// Draw gap between poles (the U opening) - use background color (black)
-	ctx.fillStyle = "#000000"
-	ctx.fillRect(x - gapWidth / 2, y - poleHeight / 2, gapWidth, poleHeight)
-	
-	// Border/stroke for entire magnet
-	ctx.strokeStyle = "#663388"
-	ctx.lineWidth = 2
-	
-	// Left pole border
-	drawRoundedRect(x - magnetSize / 2, y - poleHeight / 2, poleWidth, poleHeight, cornerRadius)
-	ctx.stroke()
-	
-	// Right pole border
-	drawRoundedRect(x + magnetSize / 2 - poleWidth, y - poleHeight / 2, poleWidth, poleHeight, cornerRadius)
-	ctx.stroke()
-	
-	// Top bar border
-	drawRoundedRect(x - magnetSize / 2, y - poleHeight / 2 - poleWidth * 0.3, magnetSize, poleWidth * 0.6, cornerRadius)
-	ctx.stroke()
-	
-	ctx.restore()
 }
 
 function drawTargets() {
