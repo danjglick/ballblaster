@@ -6,6 +6,7 @@ const MS_PER_FRAME = 1000 / FPS
 function getShim() { return (canvas?.width || window.innerWidth) / 10 }
 function getBallRadius() { return (canvas?.width || window.innerWidth) / 20 }
 function getTargetRadius() { return (canvas?.width || window.innerWidth) / 20 }
+const SPECIAL_ITEM_COOLDOWN = 1000 // ms between activations for all special items
 const FRICTION = .99
 const FLING_DIVISOR = 2
 const BALL_STOP_SPEED = 10 // Higher threshold so we treat the ball as "stopped" sooner
@@ -30,7 +31,7 @@ let ball = {
 	fadeOpacity: 1.0
 }
 let wormholeLastTeleportTime = 0 // Track when ball last teleported through a wormhole
-let wormholeCooldown = 200 // Milliseconds to wait before allowing another teleport
+let wormholeCooldown = 1000 // Milliseconds to wait before allowing another teleport
 let wormholeTeleportPending = null // { startTime: number, destX: number, destY: number, xVel: number, yVel: number }
 let wormholeDisabledUntil = 0 // Timestamp when wormholes become available again (2 seconds after use)
 let targets = []
@@ -45,6 +46,11 @@ let bush = null // Green bush that slows ball and gives green border (spawns sta
 let wormhole = null // Array of two purple wormholes that teleport ball between them (spawns starting level 5, cycles through items)
 let starHitThisTry = false // Track whether ball was colliding with star on the previous frame (for hit detection)
 let crossHitThisTry = false // Track whether ball was colliding with cross on the previous frame (for hit detection)
+let starLastHitTime = 0 // Timestamp of last star activation (cooldown)
+let switcherLastHitTime = 0 // Timestamp of last switcher activation (cooldown)
+let crossLastHitTime = 0 // Timestamp of last cross activation (cooldown)
+let lightningLastHitTime = 0 // Timestamp of last lightning activation (cooldown)
+let bushLastHitTime = 0 // Timestamp of last bush activation (cooldown)
 let availableSpecialItems = ['star', 'switcher', 'cross', 'lightning', 'bush', 'wormhole'] // Track which special items haven't been shown yet in current cycle
 let currentLevelSpecialItem = null // Track which special item type was selected for the current level
 let currentLevelSpecialItems = [] // Track which special items were selected for current level (for when 2 items spawn)
@@ -3775,6 +3781,14 @@ function handleCollisionWithStar() {
 	let wasCollidingBefore = starHitThisTry
 	
 	if (isCollidingNow && !wasCollidingBefore) {
+		// Enforce global special-item cooldown
+		let now = Date.now()
+		if (now - starLastHitTime < SPECIAL_ITEM_COOLDOWN) {
+			starHitThisTry = isCollidingNow
+			return
+		}
+		starLastHitTime = now
+
 		// Save star position (use fixed point even if star is moved later)
 		let starX = star.xPos
 		let starY = star.yPos
@@ -3821,6 +3835,13 @@ function handleCollisionWithSwitcher() {
 	let collisionDistance = ballRadius + switcher.radius
 	
 	if (distance < collisionDistance && distance > 0) {
+		// Enforce global special-item cooldown
+		let now = Date.now()
+		if (now - switcherLastHitTime < SPECIAL_ITEM_COOLDOWN) {
+			return
+		}
+		switcherLastHitTime = now
+
 		// Ball hit the switcher - switch all red and blue balls
 		// Save all positions
 		let targetPositions = targets.map(t => ({ xPos: t.xPos, yPos: t.yPos }))
@@ -3875,6 +3896,14 @@ function handleCollisionWithCross() {
 	let wasCollidingBefore = crossHitThisTry
 	
 	if (isCollidingNow && !wasCollidingBefore) {
+		// Enforce global special-item cooldown
+		let now = Date.now()
+		if (now - crossLastHitTime < SPECIAL_ITEM_COOLDOWN) {
+			crossHitThisTry = isCollidingNow
+			return
+		}
+		crossLastHitTime = now
+
 		// Ball hit the cross - double the number of obstacles
 		// Remember that we just hit this frame (used as previous-frame collision flag)
 		crossHitThisTry = true
@@ -4013,6 +4042,13 @@ function handleCollisionWithLightning() {
 	let collisionDistance = ballRadius + lightning.radius
 	
 	if (distance < collisionDistance && distance > 0) {
+		// Enforce global special-item cooldown
+		let now = Date.now()
+		if (now - lightningLastHitTime < SPECIAL_ITEM_COOLDOWN) {
+			return
+		}
+		lightningLastHitTime = now
+
 		// Clear any existing special item effects
 		bushEffectActive = false
 		ballStoppedByBushEffect = false
@@ -4035,6 +4071,13 @@ function handleCollisionWithBush() {
 	let collisionDistance = ballRadius + bush.radius
 	
 	if (distance < collisionDistance && distance > 0) {
+		// Enforce global special-item cooldown
+		let now = Date.now()
+		if (now - bushLastHitTime < SPECIAL_ITEM_COOLDOWN) {
+			return
+		}
+		bushLastHitTime = now
+
 		// Clear any existing special item effects
 		lightningEffectActive = false
 		ballStoppedByBushEffect = false
@@ -4299,7 +4342,8 @@ function draw() {
 			//  - wait a short delay, then increment the score
 			//  - then change level (no grey-ball fade)
 			trophy.levelChanged = true
-			trophy.scoreIncrementTime = Date.now() + 200 // delay score increment by 0.2s
+			// Delay score increment slightly longer so timing feels more dramatic.
+			trophy.scoreIncrementTime = Date.now() + 300 // delay score increment by 0.3s
 			trophy.scoreIncremented = false
 			// For levels after the first, wait 2 seconds after score increment before changing level
 			// For level 1, use the original timing
@@ -4314,6 +4358,21 @@ function draw() {
 		if (trophy.levelChanged && !trophy.scoreIncremented && trophy.scoreIncrementTime && Date.now() >= trophy.scoreIncrementTime) {
 			completionScore++
 			trophy.scoreIncremented = true
+			
+			// Fade out tutorial steps 2 and 4, and the "(then collect the trophy)" hint,
+			// when the score increments, instead of waiting for the next level to generate.
+			let tutorialOverlay = document.getElementById("tutorialOverlay")
+			if (tutorialOverlay && tutorialOverlay.style.visibility === "visible") {
+				if ((level === 1 && tutorialStep === 2) || (level === 2 && tutorialStep === 4)) {
+					tutorialOverlay.style.opacity = "0"
+				}
+			}
+			// Also fade out the extra "then collect the trophy" hint if it's visible.
+			let hint = document.getElementById("trophyHintOverlay")
+			if (hint && hint.style.visibility === "visible") {
+				hint.style.opacity = "0"
+			}
+			
 			// For levels after the first, set next level time to 2 seconds after score increment
 			if (level > 1 && trophy.nextLevelTime === null) {
 				trophy.nextLevelTime = Date.now() + 2000 // 2 seconds after score increment
@@ -4582,7 +4641,7 @@ function drawWormholes() {
 	// Store positions and opacities for drawing connecting line
 	let positions = []
 	
-	// Draw both wormholes as acute triangles
+	// Draw both wormholes as glowing circular portals (original design)
 	for (let i = 0; i < wormhole.length; i++) {
 		let wh = wormhole[i]
 		if (!wh) continue
@@ -4609,42 +4668,76 @@ function drawWormholes() {
 		// Store position for connecting line
 		positions.push({ x, y, opacity })
 		
-		// Find the other wormhole to determine direction
-		let otherWh = wormhole[1 - i]
-		if (!otherWh) continue
-		
-		// Calculate angle from this wormhole to the other
-		let dx = otherWh.xPos - x
-		let dy = otherWh.yPos - y
-		let angle = Math.atan2(dy, dx)
-		
 		ctx.save()
 		ctx.globalAlpha = opacity
-		ctx.translate(x, y)
-		ctx.rotate(angle)
 		
-		// Draw acute triangle pointing toward the other wormhole
-		// Tip of triangle (sharpest angle) points in positive x direction (toward other wormhole)
-		// Base is perpendicular to that direction
-		let tipX = radius * 1.2 // Tip extends forward (larger)
-		let baseY = radius * 0.7 // Half height of base (wider base for more pronounced angle ratio)
-		let baseX = -radius * 0.4 // Base x position
+		// Outer soft glow
+		let glowRadius = radius * 1.4
+		let glowGradient = ctx.createRadialGradient(
+			x, y, radius * 0.2,
+			x, y, glowRadius
+		)
+		glowGradient.addColorStop(0, "rgba(190, 120, 255, 0.9)")
+		glowGradient.addColorStop(0.5, "rgba(150, 80, 220, 0.6)")
+		glowGradient.addColorStop(1, "rgba(50, 0, 90, 0)")
+		ctx.beginPath()
+		ctx.arc(x, y, glowRadius, 0, Math.PI * 2)
+		ctx.fillStyle = glowGradient
+		ctx.fill()
+		
+		// Main ring
+		let outerRadius = radius
+		let innerRadius = radius * 0.5
+		let ringGradient = ctx.createRadialGradient(
+			x - radius * 0.3, y - radius * 0.3, innerRadius * 0.2,
+			x, y, outerRadius
+		)
+		ringGradient.addColorStop(0, "#ffe6ff")
+		ringGradient.addColorStop(0.35, "#cc99ff")
+		ringGradient.addColorStop(0.7, "#7733aa")
+		ringGradient.addColorStop(1, "#330055")
 		
 		ctx.beginPath()
-		ctx.moveTo(tipX, 0) // Tip pointing toward other wormhole
-		ctx.lineTo(baseX, -baseY) // Left base corner
-		ctx.lineTo(baseX, baseY) // Right base corner
-		ctx.closePath()
-		ctx.fillStyle = "#663388"
+		ctx.arc(x, y, outerRadius, 0, Math.PI * 2)
+		ctx.arc(x, y, innerRadius, 0, Math.PI * 2, true)
+		ctx.fillStyle = ringGradient
 		ctx.fill()
-		ctx.strokeStyle = "#8844aa"
-		ctx.lineWidth = 2
+		
+		// Bright inner edge
+		ctx.beginPath()
+		ctx.arc(x, y, innerRadius, 0, Math.PI * 2)
+		ctx.strokeStyle = "rgba(255, 255, 255, 0.9)"
+		ctx.lineWidth = Math.max(2, radius * 0.12)
 		ctx.stroke()
 		
 		ctx.restore()
 	}
 	
-	// Connecting line removed
+	// Draw a subtle connecting beam between the two wormholes
+	if (positions.length === 2) {
+		let a = positions[0]
+		let b = positions[1]
+		let beamOpacity = Math.min(a.opacity, b.opacity)
+		
+		ctx.save()
+		ctx.globalAlpha = beamOpacity * 0.7
+		
+		let gradient = ctx.createLinearGradient(a.x, a.y, b.x, b.y)
+		gradient.addColorStop(0, "rgba(190, 120, 255, 0.0)")
+		gradient.addColorStop(0.25, "rgba(210, 140, 255, 0.9)")
+		gradient.addColorStop(0.5, "rgba(255, 200, 255, 1.0)")
+		gradient.addColorStop(0.75, "rgba(210, 140, 255, 0.9)")
+		gradient.addColorStop(1, "rgba(190, 120, 255, 0.0)")
+		
+		ctx.beginPath()
+		ctx.moveTo(a.x, a.y)
+		ctx.lineTo(b.x, b.y)
+		ctx.strokeStyle = gradient
+		ctx.lineWidth = Math.max(3, getBallRadius() * 0.25)
+		ctx.stroke()
+		
+		ctx.restore()
+	}
 }
 
 function drawTargets() {
