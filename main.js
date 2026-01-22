@@ -106,6 +106,10 @@ let initialIntroStartTime = 0
 let shotActive = false
 // Track auto-reset animation when a shot fails (ball moves back, targets fade in)
 let autoResetActive = false
+// Track obstacle collisions to detect stuck bouncing
+let obstacleCollisionTimes = [] // Array of timestamps for recent obstacle collisions
+const MAX_OBSTACLE_COLLISIONS = 15 // Max collisions in time window before auto-reset
+const OBSTACLE_COLLISION_WINDOW = 2000 // Time window in ms (2 seconds)
 let autoResetStartTime = 0
 let autoResetBallFromX = 0
 let autoResetBallFromY = 0
@@ -181,6 +185,7 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 	// Reset shotActive for new levels (not retries) to prevent auto-reset from triggering
 	if (!isRetry) {
 		shotActive = false
+		obstacleCollisionTimes = [] // Reset obstacle collision tracking
 		// Reset level 3 hint position so it gets recalculated for the new level
 		level3HintPosition = null
 		level3HintFadeInStartTime = null // Reset fade-in start time for new level
@@ -3892,6 +3897,7 @@ function handleCollisionWithTarget() {
 function handleCollisionWithObstacle() {
 	let ballRadius = getBallRadius()
 	let pushAwayBuffer = 1 // Small buffer to prevent sticking
+	let currentTime = Date.now()
 	
 	for (let i = obstacles.length - 1; i >= 0; i--) {
 		let obstacle = obstacles[i]
@@ -3901,6 +3907,70 @@ function handleCollisionWithObstacle() {
 		let collisionDistance = ballRadius + obstacle.radius
 		
 		if (distance < collisionDistance && distance > 0) {
+			// Track this collision for stuck detection
+			obstacleCollisionTimes.push(currentTime)
+			
+			// Remove collisions outside the time window
+			obstacleCollisionTimes = obstacleCollisionTimes.filter(time => currentTime - time < OBSTACLE_COLLISION_WINDOW)
+			
+			// If too many collisions in the time window, trigger auto-reset
+			if (shotActive && obstacleCollisionTimes.length >= MAX_OBSTACLE_COLLISIONS && !autoResetActive && !pendingNextLevel && !isGeneratingLevel) {
+				shotActive = false
+				autoResetActive = true
+				autoResetStartTime = Date.now()
+				autoResetBallFromX = ball.xPos
+				autoResetBallFromY = ball.yPos
+				if (savedBall) {
+					autoResetBallToX = savedBall.xPos
+					autoResetBallToY = savedBall.yPos
+				} else {
+					autoResetBallToX = ball.xPos
+					autoResetBallToY = ball.yPos
+				}
+				ball.xVel = 0
+				ball.yVel = 0
+				ball.isBeingFlung = false
+				
+				// Restore the score to what it was at the start of the level
+				totalScore = savedCompletionScore
+				pointsThisLevel = 0
+				
+				// CRITICAL: Restore everything to exactly match the initial level state
+				// Restore targets array first
+				if (savedTargets && savedTargets.length > 0) {
+					targets = JSON.parse(JSON.stringify(savedTargets))
+				}
+				
+				// Restore targetsRemaining from savedTargets
+				if (savedTargets && savedTargets.length > 0) {
+					let newTargetsRemaining = []
+					for (let i = 0; i < savedTargets.length; i++) {
+						newTargetsRemaining.push({
+							xPos: savedTargets[i].xPos,
+							yPos: savedTargets[i].yPos,
+							fadeInOpacity: 1.0,
+							fadeInStartTime: Date.now()
+						})
+					}
+					targetsRemaining = newTargetsRemaining
+				}
+				completionScore = savedCompletionScore
+				
+				// Restore obstacles from savedObstacles - clear any obstacles added by cross
+				if (savedObstacles && savedObstacles.length > 0) {
+					obstacles = JSON.parse(JSON.stringify(savedObstacles))
+					// Make all restored obstacles fully visible immediately
+					for (let i = 0; i < obstacles.length; i++) {
+						obstacles[i].fadeInOpacity = 1.0
+						obstacles[i].fadeInStartTime = Date.now()
+					}
+				}
+				
+				// Reset obstacle collision tracking
+				obstacleCollisionTimes = []
+				return // Exit early since we're resetting
+			}
+			
 			// If lightning effect is active, remove the obstacle
 			if (lightningEffectActive) {
 				obstacles.splice(i, 1)
