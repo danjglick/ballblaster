@@ -1873,6 +1873,10 @@ function handleTouchstart(e) {
 				// Second tap: we have a wormhole selected, now tapping star - swap positions
 				swapWormholeAndStar(selectedForConversion.index)
 				return
+			} else if (selectedForConversion && selectedForConversion.type === 'star') {
+				// Already selected: deselect this star
+				selectedForConversion = null
+				return
 			} else {
 				// First tap: select this star
 				selectedForConversion = { type: 'star', index: 0 }
@@ -1912,6 +1916,10 @@ function handleTouchstart(e) {
 			} else if (selectedForConversion && selectedForConversion.type === 'wormhole') {
 				// Second tap: we have a wormhole selected, now tapping cross - swap positions
 				swapWormholeAndCross(selectedForConversion.index)
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'cross') {
+				// Already selected: deselect this cross
+				selectedForConversion = null
 				return
 			} else {
 				// First tap: select this cross
@@ -1953,6 +1961,10 @@ function handleTouchstart(e) {
 				// Second tap: we have a wormhole selected, now tapping switcher - swap positions
 				swapWormholeAndSwitcher(selectedForConversion.index)
 				return
+			} else if (selectedForConversion && selectedForConversion.type === 'switcher') {
+				// Already selected: deselect this switcher
+				selectedForConversion = null
+				return
 			} else {
 				// First tap: select this switcher
 				selectedForConversion = { type: 'switcher', index: 0 }
@@ -1993,6 +2005,10 @@ function handleTouchstart(e) {
 				// Second tap: we have a wormhole selected, now tapping lightning - swap positions
 				swapWormholeAndLightning(selectedForConversion.index)
 				return
+			} else if (selectedForConversion && selectedForConversion.type === 'lightning') {
+				// Already selected: deselect this lightning
+				selectedForConversion = null
+				return
 			} else {
 				// First tap: select this lightning
 				selectedForConversion = { type: 'lightning', index: 0 }
@@ -2028,6 +2044,10 @@ function handleTouchstart(e) {
 			} else if (selectedForConversion && selectedForConversion.type === 'lightning') {
 				// Second tap: we have a lightning selected, now tapping bush - swap positions
 				swapBushAndLightning()
+				return
+			} else if (selectedForConversion && selectedForConversion.type === 'bush') {
+				// Already selected: deselect this bush
+				selectedForConversion = null
 				return
 			} else {
 				// First tap: select this bush
@@ -2078,6 +2098,10 @@ function handleTouchstart(e) {
 					// Second tap: we have another wormhole selected, now tapping this wormhole - swap positions
 					swapWormholeAndWormhole(selectedForConversion.index, i)
 					return
+				} else if (selectedForConversion && selectedForConversion.type === 'wormhole' && selectedForConversion.index === i) {
+					// Already selected: deselect this wormhole
+					selectedForConversion = null
+					return
 				} else {
 					// First tap: select this specific wormhole
 					selectedForConversion = { type: 'wormhole', index: i }
@@ -2125,6 +2149,10 @@ function handleTouchstart(e) {
 				// Second tap: we have a wormhole selected, now tapping obstacle - swap positions
 				swapWormholeAndObstacle(i, selectedForConversion.index)
 				return
+			} else if (selectedForConversion && selectedForConversion.type === 'obstacle' && selectedForConversion.index === i) {
+				// Already selected: deselect this obstacle
+				selectedForConversion = null
+				return
 			} else {
 				// First tap: select this obstacle
 				selectedForConversion = { type: 'obstacle', index: i }
@@ -2166,6 +2194,10 @@ function handleTouchstart(e) {
 				// Second tap: we have a wormhole selected, now tapping target - swap positions
 				swapWormholeAndTarget(i, selectedForConversion.index)
 				return
+			} else if (selectedForConversion && selectedForConversion.type === 'target' && selectedForConversion.index === i) {
+				// Already selected: deselect this target
+				selectedForConversion = null
+				return
 			} else {
 				// First tap: select this target
 				selectedForConversion = { type: 'target', index: i }
@@ -2178,8 +2210,12 @@ function handleTouchstart(e) {
 	if (trophy && !trophy.hit) {
 		let trophyDistance = Math.hypot(touch1.xPos - trophy.xPos, touch1.yPos - trophy.yPos)
 		if (trophyDistance < trophy.radius + TOUCH_TOLERANCE) {
-			// First tap: select this trophy
-			{
+			if (selectedForConversion && selectedForConversion.type === 'trophy') {
+				// Already selected: deselect this trophy
+				selectedForConversion = null
+				return
+			} else {
+				// First tap: select this trophy
 				selectedForConversion = { type: 'trophy', index: 0 }
 				return
 			}
