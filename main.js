@@ -3586,14 +3586,20 @@ function moveBall() {
 	ball.xVel *= FRICTION 
 	ball.yVel *= FRICTION
 
-
 	// If a shot is in progress, the ball has effectively stopped (after the fling),
 	// and we still have targets remaining, start a quick animated reset of this
 	// level: ball glides back to its starting spot while previously-cleared
 	// targets fade back in, both finishing at the same time.
-	if (shotActive && !ball.isBeingFlung && !pendingNextLevel && !isGeneratingLevel && targetsRemaining.length > 0) {
+	if (shotActive && !pendingNextLevel && !isGeneratingLevel && targetsRemaining.length > 0) {
 		let speed = Math.hypot(ball.xVel, ball.yVel)
-		if (speed < BALL_STOP_SPEED) {
+		
+		// If ball was being flung (from wormhole teleport or normal fling) and has slowed down,
+		// mark it as no longer being flung so auto-reset can trigger
+		if (ball.isBeingFlung && speed < BALL_STOP_SPEED) {
+			ball.isBeingFlung = false
+		}
+		
+		if (!ball.isBeingFlung && speed < BALL_STOP_SPEED) {
 			// If the ball is still moving fast enough and our simple straight-line-
 			// with-friction prediction says it will clear all remaining targets,
 			// don't end the run yet.
