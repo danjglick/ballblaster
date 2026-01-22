@@ -110,6 +110,9 @@ let autoResetActive = false
 let obstacleCollisionTimes = [] // Array of timestamps for recent obstacle collisions
 const MAX_OBSTACLE_COLLISIONS = 15 // Max collisions in time window before auto-reset
 const OBSTACLE_COLLISION_WINDOW = 2000 // Time window in ms (2 seconds)
+// Track when ball slowed below BALL_STOP_SPEED (for conservative isBeingFlung reset)
+let ballSlowBelowStopSpeedTime = null // Timestamp when ball first slowed below BALL_STOP_SPEED
+const BALL_SLOW_CONFIRMATION_TIME = 100 // ms to wait before confirming ball is actually stopped
 let autoResetStartTime = 0
 let autoResetBallFromX = 0
 let autoResetBallFromY = 0
@@ -186,6 +189,7 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 	if (!isRetry) {
 		shotActive = false
 		obstacleCollisionTimes = [] // Reset obstacle collision tracking
+		ballSlowBelowStopSpeedTime = null // Reset ball slow tracking
 		// Reset level 3 hint position so it gets recalculated for the new level
 		level3HintPosition = null
 		level3HintFadeInStartTime = null // Reset fade-in start time for new level
@@ -3600,10 +3604,31 @@ function moveBall() {
 		
 		// If ball was being flung (from wormhole teleport or normal fling) and has slowed down,
 		// mark it as no longer being flung so auto-reset can trigger
-		if (ball.isBeingFlung && speed < BALL_STOP_SPEED) {
-			ball.isBeingFlung = false
+		// Use a conservative approach: only reset after ball has been slow for a brief moment
+		// to avoid interfering with active flinging or rapid velocity changes
+		if (ball.isBeingFlung) {
+			if (speed < BALL_STOP_SPEED) {
+				// Ball is slow - start tracking time
+				if (ballSlowBelowStopSpeedTime === null) {
+					ballSlowBelowStopSpeedTime = Date.now()
+				} else {
+					// Ball has been slow for confirmation time - safe to reset
+					let timeSlow = Date.now() - ballSlowBelowStopSpeedTime
+					if (timeSlow >= BALL_SLOW_CONFIRMATION_TIME) {
+						ball.isBeingFlung = false
+						ballSlowBelowStopSpeedTime = null
+					}
+				}
+			} else {
+				// Ball sped up again - reset tracking
+				ballSlowBelowStopSpeedTime = null
+			}
+		} else {
+			// Ball is not being flung - clear tracking
+			ballSlowBelowStopSpeedTime = null
 		}
 		
+		// Check for auto-reset: ball must not be actively being flung AND speed must be below threshold
 		if (!ball.isBeingFlung && speed < BALL_STOP_SPEED) {
 			// If the ball is still moving fast enough and our simple straight-line-
 			// with-friction prediction says it will clear all remaining targets,
