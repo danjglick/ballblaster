@@ -141,6 +141,9 @@ let level2HintFadeOutStartTime = null // When the hint should start fading out
 let level1HintPosition = null // Random position for the level 1 hint
 let level1BallFadeInTime = null // When the ball faded in on level 1
 let level1HintFadeOutStartTime = null // When the hint should start fading out
+let level10HintPosition = null // Random position for the level 10 hint
+let level10HintFadeInStartTime = null // When the hint should start fading in
+let level10HintFadeOutStartTime = null // When the hint should start fading out
 
 // Victory drawing - user can draw on screen when trophy is displayed
 let victoryDrawingStrokes = [] // Array of completed strokes, each stroke is an array of {x, y} points
@@ -190,6 +193,10 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 		level1HintPosition = null
 		level1BallFadeInTime = null // Reset ball fade-in time for new level
 		level1HintFadeOutStartTime = null // Reset fade-out start time for new level
+		// Reset level 10 hint position so it gets recalculated for the new level
+		level10HintPosition = null
+		level10HintFadeInStartTime = null // Reset fade-in start time for new level
+		level10HintFadeOutStartTime = null // Reset fade-out start time for new level
 	}
 	
 	// Check tries before resetting - if retrying with tries > 0, restore saved positions
@@ -3814,6 +3821,9 @@ function handleCollisionWithTarget() {
 				if (level === 3 && level3HintFadeOutStartTime === null) {
 					level3HintFadeOutStartTime = fadeOutTime
 				}
+				if (level === 10 && level10HintFadeOutStartTime === null) {
+					level10HintFadeOutStartTime = fadeOutTime
+				}
 				
 				// Remember where the last target was collected so we can place the trophy there
 				lastTargetX = targetX
@@ -4477,6 +4487,10 @@ function draw() {
 				if (level === 3 && !hasExecutedSwap && level3HintFadeInStartTime === null) {
 					level3HintFadeInStartTime = Date.now() + 1000
 				}
+				// Start level 10 hint fade-in 1 second after door fades out
+				if (level === 10 && level10HintFadeInStartTime === null) {
+					level10HintFadeInStartTime = Date.now() + 1000
+				}
 				startingDoor = null
 			}
 		} else if (startingDoor.fadeInStartTime !== undefined && startingDoor.fadeInStartTime <= Date.now()) {
@@ -4586,6 +4600,9 @@ function draw() {
 	
 	// Draw level 1 hint if 10 seconds passed and tries == 0
 	drawLevel1Hint()
+	
+	// Draw level 10 hint
+	drawLevel10Hint()
 }
 
 function createFireworks(x, y, color = "blue") {
@@ -6132,13 +6149,80 @@ function drawLevel1Hint() {
 	ctx.restore()
 }
 
+// Draw level 10 hint
+function drawLevel10Hint() {
+	if (level !== 10) return
+	
+	// Generate random position if not set yet
+	if (!level10HintPosition) {
+		level10HintPosition = getRandomHintPosition()
+	}
+	
+	if (!level10HintPosition) return
+	
+	// Calculate fade-in opacity (fade in 1 second after door fades out, like level 3)
+	let fadeInOpacity = 1.0
+	if (level10HintFadeInStartTime !== null && level10HintFadeInStartTime > Date.now()) {
+		// Not time to fade in yet
+		fadeInOpacity = 0.0
+	} else if (level10HintFadeInStartTime !== null) {
+		// Fade in
+		let elapsed = Date.now() - level10HintFadeInStartTime
+		let fadeDuration = FADE_DURATION // 1 second
+		fadeInOpacity = Math.min(1.0, elapsed / fadeDuration)
+	} else {
+		// If door hasn't faded out yet, don't show hint
+		if (startingDoor) {
+			fadeInOpacity = 0.0
+		}
+	}
+	
+	// Calculate fade-out opacity
+	let fadeOutOpacity = 1.0
+	if (level10HintFadeOutStartTime !== null) {
+		let elapsed = Date.now() - level10HintFadeOutStartTime
+		let fadeDuration = FADE_DURATION // 1 second
+		fadeOutOpacity = Math.max(0.0, 1.0 - (elapsed / fadeDuration))
+	}
+	
+	let opacity = fadeInOpacity * fadeOutOpacity
+	
+	if (opacity <= 0) return // Don't draw if invisible
+	
+	ctx.save()
+	ctx.font = "24px Arial"
+	ctx.textAlign = "center"
+	ctx.textBaseline = "middle"
+	ctx.globalAlpha = opacity
+	
+	let line1 = "hint: skip any level"
+	let line2 = "by tapping the score"
+	let x = level10HintPosition.x
+	let y = level10HintPosition.y
+	let lineHeight = 28 // Spacing between lines
+	
+	// Draw text shadow for readability
+	ctx.globalAlpha = opacity * 0.5
+	ctx.fillStyle = "black"
+	ctx.fillText(line1, x + 1, y - lineHeight / 2 + 1)
+	ctx.fillText(line2, x + 1, y + lineHeight / 2 + 1)
+	
+	// Draw main text in white
+	ctx.globalAlpha = opacity
+	ctx.fillStyle = "white"
+	ctx.fillText(line1, x, y - lineHeight / 2)
+	ctx.fillText(line2, x, y + lineHeight / 2)
+	
+	ctx.restore()
+}
+
 // Get a random position for the hint that avoids sprites and edges
 function getRandomHintPosition() {
 	let padding = 80 // Distance from edges
 	let spriteBuffer = 120 // Distance from sprites (increased for more spacing)
 	
 	// Measure text width to avoid placing it where it would go off screen
-	// Use the wider of all possible hint texts (level 1, 2, or 3)
+	// Use the wider of all possible hint texts (level 1, 2, 3, or 10)
 	ctx.save()
 	ctx.font = "24px Arial"
 	let level3Line1Width = ctx.measureText("hint: swap any two items").width
@@ -6147,10 +6231,13 @@ function getRandomHintPosition() {
 	let level2Line2Width = ctx.measureText("in one shot to move on").width
 	let level1Line1Width = ctx.measureText("hint: fling the smiley face").width
 	let level1Line2Width = ctx.measureText("at the trophy").width
+	let level10Line1Width = ctx.measureText("hint: skip any level").width
+	let level10Line2Width = ctx.measureText("by tapping the score").width
 	let maxLevel3Width = Math.max(level3Line1Width, level3Line2Width)
 	let maxLevel2Width = Math.max(level2Line1Width, level2Line2Width)
 	let maxLevel1Width = Math.max(level1Line1Width, level1Line2Width)
-	let textWidth = Math.max(maxLevel3Width, maxLevel2Width, maxLevel1Width) // Use the widest line
+	let maxLevel10Width = Math.max(level10Line1Width, level10Line2Width)
+	let textWidth = Math.max(maxLevel3Width, maxLevel2Width, maxLevel1Width, maxLevel10Width) // Use the widest line
 	ctx.restore()
 	
 	let minX = padding + textWidth / 2
