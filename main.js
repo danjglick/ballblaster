@@ -5971,9 +5971,9 @@ function drawLevel3SwapHint() {
 	ctx.restore()
 }
 
-// Draw level 2 hint if tries == 3 and auto-reset has completed
+// Draw level 2 hint if tries >= 3 and auto-reset has completed (show until last target is hit)
 function drawLevel2Hint() {
-	if (level !== 2 || tries !== 3) return
+	if (level !== 2 || tries < 3) return
 	
 	// Generate random position if not set yet
 	if (!level2HintPosition) {
