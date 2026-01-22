@@ -19,8 +19,12 @@ const TUTORIAL_FADE_DELAY = 2000 // ms delay before fading tutorial
 const OBSTACLE_FADE_DELAY = 1000 // ms delay before fading obstacles
 const BALL_MIN_CONTINUE_SPEED = 3 // If above this and path will clear all targets, don't auto-reset yet
 const AUTO_RESET_DURATION = 1000 // ms for ball move-back + target fade-in
+const SWAP_ANIMATION_DURATION = 350 // ms for swap position animation
 
 let canvas;
+
+// Active swap animations: array of { sprite, fromX, fromY, toX, toY, startTime }
+let swapAnimations = []
 let ctx;
 let ball = {
 	xPos: 0,
@@ -216,8 +220,8 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 		if (!isRetry) {
 			let ballRadius = getBallRadius()
 			// Level 1: door fades in 1 second after targets/obstacles (score also fading in)
-			// Level 2+: door fades in same time as targets/obstacles
-			let doorFadeDelay = level === 1 ? FADE_DURATION : 0
+			// Level 2+: door fades in 1 second after targets/obstacles
+			let doorFadeDelay = FADE_DURATION
 			startingDoor = {
 				xPos: ball.xPos,
 				yPos: ball.yPos,
@@ -525,8 +529,8 @@ function generateLevel(isRetry = false, fewerSprites = false) {
  
 	// Initialize ball fade-in - ball fades in 1 second after door
 	// Level 1: targets at 1s, door at 2s, ball at 3s
-	// Level 2+: targets/door at 0s, ball at 1s
-	let ballFadeDelay = level === 1 ? FADE_IN_DELAY + FADE_DURATION * 2 : FADE_DURATION
+	// Level 2+: targets at 0s, door at 1s, ball at 2s
+	let ballFadeDelay = level === 1 ? FADE_IN_DELAY + FADE_DURATION * 2 : FADE_DURATION * 2
 	if (ball && !wormholeTeleportPending) {
 		if (ballWasHidden || !isRetry) {
 			// New level or coming from door hit - start ball at opacity 0 and fade in after door
@@ -645,8 +649,53 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 function loopGame() { // MAIN GAME LOOP
 	moveBall()
 	handleCollision()
+	updateSwapAnimations()
 	draw()
 	gameLoopTimeout = setTimeout(loopGame, MS_PER_FRAME)
+}
+
+// Start a swap animation for a sprite
+function startSwapAnimation(sprite, fromX, fromY, toX, toY) {
+	// Remove any existing animation for this sprite
+	swapAnimations = swapAnimations.filter(a => a.sprite !== sprite)
+	// Add new animation
+	swapAnimations.push({
+		sprite: sprite,
+		fromX: fromX,
+		fromY: fromY,
+		toX: toX,
+		toY: toY,
+		startTime: Date.now()
+	})
+	// Set final position immediately (for collision detection)
+	sprite.xPos = toX
+	sprite.yPos = toY
+}
+
+// Update and clean up completed swap animations
+function updateSwapAnimations() {
+	let now = Date.now()
+	swapAnimations = swapAnimations.filter(a => {
+		return (now - a.startTime) < SWAP_ANIMATION_DURATION
+	})
+}
+
+// Get the visual position of a sprite (animated if swapping, otherwise actual position)
+function getSwapAnimatedPosition(sprite) {
+	let anim = swapAnimations.find(a => a.sprite === sprite)
+	if (!anim) {
+		return { x: sprite.xPos, y: sprite.yPos }
+	}
+	
+	let elapsed = Date.now() - anim.startTime
+	let t = Math.min(1.0, elapsed / SWAP_ANIMATION_DURATION)
+	// Ease out cubic
+	t = 1 - Math.pow(1 - t, 3)
+	
+	return {
+		x: anim.fromX + (anim.toX - anim.fromX) * t,
+		y: anim.fromY + (anim.toY - anim.fromY) * t
+	}
 }
 
 function convertTargetAndObstacle(targetIndex, obstacleIndex) {
@@ -664,22 +713,28 @@ function convertTargetAndObstacle(targetIndex, obstacleIndex) {
 	obstacles.splice(obstacleIndex, 1)
 	targetsRemaining.splice(targetIndex, 1)
 	
-	// Convert obstacle to target (at obstacle's position)
-	targetsRemaining.push({
+	// Convert obstacle to target (at obstacle's position, but animate from target's position)
+	let newTarget = {
 		xPos: obstacleX,
 		yPos: obstacleY,
 		fadeInOpacity: 1.0, // Instantly visible
 		fadeInStartTime: Date.now() // Already started
-	})
+	}
+	targetsRemaining.push(newTarget)
+	// Animate the new target from where the old target was
+	startSwapAnimation(newTarget, targetX, targetY, obstacleX, obstacleY)
 	
-	// Convert target to obstacle (at target's position)
-	obstacles.push({
+	// Convert target to obstacle (at target's position, but animate from obstacle's position)
+	let newObstacle = {
 		xPos: targetX,
 		yPos: targetY,
 		radius: targetRadius,
 		fadeInOpacity: 1.0, // Instantly visible
 		fadeInStartTime: Date.now() // Already started
-	})
+	}
+	obstacles.push(newObstacle)
+	// Animate the new obstacle from where the old obstacle was
+	startSwapAnimation(newObstacle, obstacleX, obstacleY, targetX, targetY)
 	
 	selectedForConversion = null
 	isConvertingObstacle = true
@@ -713,14 +768,11 @@ function swapStarAndTarget(targetIndex) {
 		}
 	}
 	
-	// Swap positions
-	star.xPos = targetX
-	star.yPos = targetY
-	target.xPos = starX
-	target.yPos = starY
+	// Swap positions with animation
+	startSwapAnimation(star, starX, starY, targetX, targetY)
+	startSwapAnimation(target, targetX, targetY, starX, starY)
 	if (targetInTargets) {
-		targetInTargets.xPos = starX
-		targetInTargets.yPos = starY
+		startSwapAnimation(targetInTargets, targetX, targetY, starX, starY)
 	}
 	
 	// Ensure items are instantly visible
@@ -741,11 +793,9 @@ function swapStarAndObstacle(obstacleIndex) {
 	let obstacleX = obstacle.xPos
 	let obstacleY = obstacle.yPos
 	
-	// Swap positions
-	star.xPos = obstacleX
-	star.yPos = obstacleY
-	obstacle.xPos = starX
-	obstacle.yPos = starY
+	// Swap positions with animation
+	startSwapAnimation(star, starX, starY, obstacleX, obstacleY)
+	startSwapAnimation(obstacle, obstacleX, obstacleY, starX, starY)
 	
 	// Ensure items are instantly visible
 	star.fadeInOpacity = 1.0
@@ -782,14 +832,11 @@ function swapCrossAndTarget(targetIndex) {
 		}
 	}
 	
-	// Swap positions
-	cross.xPos = targetX
-	cross.yPos = targetY
-	target.xPos = crossX
-	target.yPos = crossY
+	// Swap positions with animation
+	startSwapAnimation(cross, crossX, crossY, targetX, targetY)
+	startSwapAnimation(target, targetX, targetY, crossX, crossY)
 	if (targetInTargets) {
-		targetInTargets.xPos = crossX
-		targetInTargets.yPos = crossY
+		startSwapAnimation(targetInTargets, targetX, targetY, crossX, crossY)
 	}
 	
 	// Ensure items are instantly visible
@@ -810,11 +857,9 @@ function swapCrossAndObstacle(obstacleIndex) {
 	let obstacleX = obstacle.xPos
 	let obstacleY = obstacle.yPos
 	
-	// Swap positions
-	cross.xPos = obstacleX
-	cross.yPos = obstacleY
-	obstacle.xPos = crossX
-	obstacle.yPos = crossY
+	// Swap positions with animation
+	startSwapAnimation(cross, crossX, crossY, obstacleX, obstacleY)
+	startSwapAnimation(obstacle, obstacleX, obstacleY, crossX, crossY)
 	
 	// Ensure items are instantly visible
 	cross.fadeInOpacity = 1.0
@@ -833,11 +878,9 @@ function swapStarAndCross() {
 	let crossX = cross.xPos
 	let crossY = cross.yPos
 	
-	// Swap positions
-	star.xPos = crossX
-	star.yPos = crossY
-	cross.xPos = starX
-	cross.yPos = starY
+	// Swap positions with animation
+	startSwapAnimation(star, starX, starY, crossX, crossY)
+	startSwapAnimation(cross, crossX, crossY, starX, starY)
 	
 	// Ensure items are instantly visible
 	star.fadeInOpacity = 1.0
@@ -856,11 +899,9 @@ function swapStarAndSwitcher() {
 	let switcherX = switcher.xPos
 	let switcherY = switcher.yPos
 	
-	// Swap positions
-	star.xPos = switcherX
-	star.yPos = switcherY
-	switcher.xPos = starX
-	switcher.yPos = starY
+	// Swap positions with animation
+	startSwapAnimation(star, starX, starY, switcherX, switcherY)
+	startSwapAnimation(switcher, switcherX, switcherY, starX, starY)
 	
 	// Ensure items are instantly visible
 	star.fadeInOpacity = 1.0
@@ -879,11 +920,9 @@ function swapCrossAndSwitcher() {
 	let switcherX = switcher.xPos
 	let switcherY = switcher.yPos
 	
-	// Swap positions
-	cross.xPos = switcherX
-	cross.yPos = switcherY
-	switcher.xPos = crossX
-	switcher.yPos = crossY
+	// Swap positions with animation
+	startSwapAnimation(cross, crossX, crossY, switcherX, switcherY)
+	startSwapAnimation(switcher, switcherX, switcherY, crossX, crossY)
 	
 	// Ensure items are instantly visible
 	cross.fadeInOpacity = 1.0
@@ -920,14 +959,11 @@ function swapSwitcherAndTarget(targetIndex) {
 		}
 	}
 	
-	// Swap positions
-	switcher.xPos = targetX
-	switcher.yPos = targetY
-	target.xPos = switcherX
-	target.yPos = switcherY
+	// Swap positions with animation
+	startSwapAnimation(switcher, switcherX, switcherY, targetX, targetY)
+	startSwapAnimation(target, targetX, targetY, switcherX, switcherY)
 	if (targetInTargets) {
-		targetInTargets.xPos = switcherX
-		targetInTargets.yPos = switcherY
+		startSwapAnimation(targetInTargets, targetX, targetY, switcherX, switcherY)
 	}
 	
 	// Ensure items are instantly visible
@@ -948,11 +984,9 @@ function swapSwitcherAndObstacle(obstacleIndex) {
 	let obstacleX = obstacle.xPos
 	let obstacleY = obstacle.yPos
 	
-	// Swap positions
-	switcher.xPos = obstacleX
-	switcher.yPos = obstacleY
-	obstacle.xPos = switcherX
-	obstacle.yPos = switcherY
+	// Swap positions with animation
+	startSwapAnimation(switcher, switcherX, switcherY, obstacleX, obstacleY)
+	startSwapAnimation(obstacle, obstacleX, obstacleY, switcherX, switcherY)
 	
 	// Ensure items are instantly visible
 	switcher.fadeInOpacity = 1.0
@@ -987,14 +1021,11 @@ function swapBallAndTarget(targetIndex) {
 		}
 	}
 	
-	// Swap positions
-	ball.xPos = targetX
-	ball.yPos = targetY
-	target.xPos = ballX
-	target.yPos = ballY
+	// Swap positions with animation
+	startSwapAnimation(ball, ballX, ballY, targetX, targetY)
+	startSwapAnimation(target, targetX, targetY, ballX, ballY)
 	if (targetInTargets) {
-		targetInTargets.xPos = ballX
-		targetInTargets.yPos = ballY
+		startSwapAnimation(targetInTargets, targetX, targetY, ballX, ballY)
 	}
 	
 	// Ensure target is instantly visible
@@ -1016,11 +1047,9 @@ function swapBallAndObstacle(obstacleIndex) {
 	let obstacleX = obstacle.xPos
 	let obstacleY = obstacle.yPos
 	
-	// Swap positions
-	ball.xPos = obstacleX
-	ball.yPos = obstacleY
-	obstacle.xPos = ballX
-	obstacle.yPos = ballY
+	// Swap positions with animation
+	startSwapAnimation(ball, ballX, ballY, obstacleX, obstacleY)
+	startSwapAnimation(obstacle, obstacleX, obstacleY, ballX, ballY)
 	
 	// Ensure obstacle is instantly visible
 	obstacle.fadeInOpacity = 1.0
@@ -1042,11 +1071,9 @@ function swapBallAndStar() {
 	let starX = star.xPos
 	let starY = star.yPos
 	
-	// Swap positions
-	ball.xPos = starX
-	ball.yPos = starY
-	star.xPos = ballX
-	star.yPos = ballY
+	// Swap positions with animation
+	startSwapAnimation(ball, ballX, ballY, starX, starY)
+	startSwapAnimation(star, starX, starY, ballX, ballY)
 	
 	// Ensure star is instantly visible
 	star.fadeInOpacity = 1.0
@@ -1068,11 +1095,9 @@ function swapBallAndSwitcher() {
 	let switcherX = switcher.xPos
 	let switcherY = switcher.yPos
 	
-	// Swap positions
-	ball.xPos = switcherX
-	ball.yPos = switcherY
-	switcher.xPos = ballX
-	switcher.yPos = ballY
+	// Swap positions with animation
+	startSwapAnimation(ball, ballX, ballY, switcherX, switcherY)
+	startSwapAnimation(switcher, switcherX, switcherY, ballX, ballY)
 	
 	// Ensure switcher is instantly visible
 	switcher.fadeInOpacity = 1.0
@@ -1094,11 +1119,9 @@ function swapBallAndCross() {
 	let crossX = cross.xPos
 	let crossY = cross.yPos
 	
-	// Swap positions
-	ball.xPos = crossX
-	ball.yPos = crossY
-	cross.xPos = ballX
-	cross.yPos = ballY
+	// Swap positions with animation
+	startSwapAnimation(ball, ballX, ballY, crossX, crossY)
+	startSwapAnimation(cross, crossX, crossY, ballX, ballY)
 	
 	// Ensure cross is instantly visible
 	cross.fadeInOpacity = 1.0
@@ -1120,11 +1143,9 @@ function swapBallAndLightning() {
 	let lightningX = lightning.xPos
 	let lightningY = lightning.yPos
 	
-	// Swap positions
-	ball.xPos = lightningX
-	ball.yPos = lightningY
-	lightning.xPos = ballX
-	lightning.yPos = ballY
+	// Swap positions with animation
+	startSwapAnimation(ball, ballX, ballY, lightningX, lightningY)
+	startSwapAnimation(lightning, lightningX, lightningY, ballX, ballY)
 	
 	// Ensure lightning is instantly visible
 	lightning.fadeInOpacity = 1.0
@@ -1164,14 +1185,11 @@ function swapLightningAndTarget(targetIndex) {
 		}
 	}
 	
-	// Swap positions
-	lightning.xPos = targetX
-	lightning.yPos = targetY
-	target.xPos = lightningX
-	target.yPos = lightningY
+	// Swap positions with animation
+	startSwapAnimation(lightning, lightningX, lightningY, targetX, targetY)
+	startSwapAnimation(target, targetX, targetY, lightningX, lightningY)
 	if (targetInTargets) {
-		targetInTargets.xPos = lightningX
-		targetInTargets.yPos = lightningY
+		startSwapAnimation(targetInTargets, targetX, targetY, lightningX, lightningY)
 	}
 	
 	// Ensure items are instantly visible
@@ -1192,11 +1210,9 @@ function swapLightningAndObstacle(obstacleIndex) {
 	let obstacleX = obstacle.xPos
 	let obstacleY = obstacle.yPos
 	
-	// Swap positions
-	lightning.xPos = obstacleX
-	lightning.yPos = obstacleY
-	obstacle.xPos = lightningX
-	obstacle.yPos = lightningY
+	// Swap positions with animation
+	startSwapAnimation(lightning, lightningX, lightningY, obstacleX, obstacleY)
+	startSwapAnimation(obstacle, obstacleX, obstacleY, lightningX, lightningY)
 	
 	// Ensure items are instantly visible
 	lightning.fadeInOpacity = 1.0
@@ -1215,11 +1231,9 @@ function swapLightningAndStar() {
 	let starX = star.xPos
 	let starY = star.yPos
 	
-	// Swap positions
-	lightning.xPos = starX
-	lightning.yPos = starY
-	star.xPos = lightningX
-	star.yPos = lightningY
+	// Swap positions with animation
+	startSwapAnimation(lightning, lightningX, lightningY, starX, starY)
+	startSwapAnimation(star, starX, starY, lightningX, lightningY)
 	
 	// Ensure items are instantly visible
 	lightning.fadeInOpacity = 1.0
@@ -1238,11 +1252,9 @@ function swapLightningAndSwitcher() {
 	let switcherX = switcher.xPos
 	let switcherY = switcher.yPos
 	
-	// Swap positions
-	lightning.xPos = switcherX
-	lightning.yPos = switcherY
-	switcher.xPos = lightningX
-	switcher.yPos = lightningY
+	// Swap positions with animation
+	startSwapAnimation(lightning, lightningX, lightningY, switcherX, switcherY)
+	startSwapAnimation(switcher, switcherX, switcherY, lightningX, lightningY)
 	
 	// Ensure items are instantly visible
 	lightning.fadeInOpacity = 1.0
@@ -1261,11 +1273,9 @@ function swapLightningAndCross() {
 	let crossX = cross.xPos
 	let crossY = cross.yPos
 	
-	// Swap positions
-	lightning.xPos = crossX
-	lightning.yPos = crossY
-	cross.xPos = lightningX
-	cross.yPos = lightningY
+	// Swap positions with animation
+	startSwapAnimation(lightning, lightningX, lightningY, crossX, crossY)
+	startSwapAnimation(cross, crossX, crossY, lightningX, lightningY)
 	
 	// Ensure items are instantly visible
 	lightning.fadeInOpacity = 1.0
@@ -1284,11 +1294,9 @@ function swapBallAndBush() {
 	let bushX = bush.xPos
 	let bushY = bush.yPos
 	
-	// Swap positions
-	ball.xPos = bushX
-	ball.yPos = bushY
-	bush.xPos = ballX
-	bush.yPos = ballY
+	// Swap positions with animation
+	startSwapAnimation(ball, ballX, ballY, bushX, bushY)
+	startSwapAnimation(bush, bushX, bushY, ballX, ballY)
 	
 	// Ensure bush is instantly visible
 	bush.fadeInOpacity = 1.0
@@ -1324,14 +1332,11 @@ function swapBushAndTarget(targetIndex) {
 		}
 	}
 	
-	// Swap positions
-	bush.xPos = targetX
-	bush.yPos = targetY
-	target.xPos = bushX
-	target.yPos = bushY
+	// Swap positions with animation
+	startSwapAnimation(bush, bushX, bushY, targetX, targetY)
+	startSwapAnimation(target, targetX, targetY, bushX, bushY)
 	if (targetInTargets) {
-		targetInTargets.xPos = bushX
-		targetInTargets.yPos = bushY
+		startSwapAnimation(targetInTargets, targetX, targetY, bushX, bushY)
 	}
 	
 	// Ensure items are instantly visible
@@ -1352,11 +1357,9 @@ function swapBushAndObstacle(obstacleIndex) {
 	let obstacleX = obstacle.xPos
 	let obstacleY = obstacle.yPos
 	
-	// Swap positions
-	bush.xPos = obstacleX
-	bush.yPos = obstacleY
-	obstacle.xPos = bushX
-	obstacle.yPos = bushY
+	// Swap positions with animation
+	startSwapAnimation(bush, bushX, bushY, obstacleX, obstacleY)
+	startSwapAnimation(obstacle, obstacleX, obstacleY, bushX, bushY)
 	
 	// Ensure items are instantly visible
 	bush.fadeInOpacity = 1.0
@@ -1375,11 +1378,9 @@ function swapBushAndStar() {
 	let starX = star.xPos
 	let starY = star.yPos
 	
-	// Swap positions
-	bush.xPos = starX
-	bush.yPos = starY
-	star.xPos = bushX
-	star.yPos = bushY
+	// Swap positions with animation
+	startSwapAnimation(bush, bushX, bushY, starX, starY)
+	startSwapAnimation(star, starX, starY, bushX, bushY)
 	
 	// Ensure items are instantly visible
 	bush.fadeInOpacity = 1.0
@@ -1398,11 +1399,9 @@ function swapBushAndSwitcher() {
 	let switcherX = switcher.xPos
 	let switcherY = switcher.yPos
 	
-	// Swap positions
-	bush.xPos = switcherX
-	bush.yPos = switcherY
-	switcher.xPos = bushX
-	switcher.yPos = bushY
+	// Swap positions with animation
+	startSwapAnimation(bush, bushX, bushY, switcherX, switcherY)
+	startSwapAnimation(switcher, switcherX, switcherY, bushX, bushY)
 	
 	// Ensure items are instantly visible
 	bush.fadeInOpacity = 1.0
@@ -1421,11 +1420,9 @@ function swapBushAndCross() {
 	let crossX = cross.xPos
 	let crossY = cross.yPos
 	
-	// Swap positions
-	bush.xPos = crossX
-	bush.yPos = crossY
-	cross.xPos = bushX
-	cross.yPos = bushY
+	// Swap positions with animation
+	startSwapAnimation(bush, bushX, bushY, crossX, crossY)
+	startSwapAnimation(cross, crossX, crossY, bushX, bushY)
 	
 	// Ensure items are instantly visible
 	bush.fadeInOpacity = 1.0
@@ -1444,11 +1441,9 @@ function swapBushAndLightning() {
 	let lightningX = lightning.xPos
 	let lightningY = lightning.yPos
 	
-	// Swap positions
-	bush.xPos = lightningX
-	bush.yPos = lightningY
-	lightning.xPos = bushX
-	lightning.yPos = bushY
+	// Swap positions with animation
+	startSwapAnimation(bush, bushX, bushY, lightningX, lightningY)
+	startSwapAnimation(lightning, lightningX, lightningY, bushX, bushY)
 	
 	// Ensure items are instantly visible
 	bush.fadeInOpacity = 1.0
@@ -1471,15 +1466,37 @@ function swapBallAndWormhole(wormholeIndex) {
 	let whX = wh.xPos
 	let whY = wh.yPos
 	
-	// Swap positions
-	ball.xPos = whX
-	ball.yPos = whY
-	wh.xPos = ballX
-	wh.yPos = ballY
+	// Swap positions with animation
+	startSwapAnimation(ball, ballX, ballY, whX, whY)
+	startSwapAnimation(wh, whX, whY, ballX, ballY)
 	
 	// Ensure wormhole is instantly visible
 	wh.fadeInOpacity = 1.0
 	wh.fadeInStartTime = Date.now()
+	
+	// Reset ball velocity when swapping
+	ball.xVel = 0
+	ball.yVel = 0
+	ball.isBeingFlung = false
+	
+	selectedForConversion = null
+}
+
+function swapBallAndTrophy() {
+	if (!trophy) return
+	
+	let ballX = ball.xPos
+	let ballY = ball.yPos
+	let trophyX = trophy.xPos
+	let trophyY = trophy.yPos
+	
+	// Swap positions with animation
+	startSwapAnimation(ball, ballX, ballY, trophyX, trophyY)
+	startSwapAnimation(trophy, trophyX, trophyY, ballX, ballY)
+	
+	// Ensure trophy is instantly visible
+	trophy.fadeInOpacity = 1.0
+	trophy.fadeInStartTime = Date.now()
 	
 	// Reset ball velocity when swapping
 	ball.xVel = 0
@@ -1515,14 +1532,11 @@ function swapWormholeAndTarget(targetIndex, wormholeIndex) {
 		}
 	}
 	
-	// Swap positions
-	wh.xPos = targetX
-	wh.yPos = targetY
-	target.xPos = whX
-	target.yPos = whY
+	// Swap positions with animation
+	startSwapAnimation(wh, whX, whY, targetX, targetY)
+	startSwapAnimation(target, targetX, targetY, whX, whY)
 	if (targetInTargets) {
-		targetInTargets.xPos = whX
-		targetInTargets.yPos = whY
+		startSwapAnimation(targetInTargets, targetX, targetY, whX, whY)
 	}
 	
 	// Ensure items are instantly visible
@@ -1547,11 +1561,9 @@ function swapWormholeAndObstacle(obstacleIndex, wormholeIndex) {
 	let obstacleX = obstacle.xPos
 	let obstacleY = obstacle.yPos
 	
-	// Swap positions
-	wh.xPos = obstacleX
-	wh.yPos = obstacleY
-	obstacle.xPos = whX
-	obstacle.yPos = whY
+	// Swap positions with animation
+	startSwapAnimation(wh, whX, whY, obstacleX, obstacleY)
+	startSwapAnimation(obstacle, obstacleX, obstacleY, whX, whY)
 	
 	// Ensure items are instantly visible
 	wh.fadeInOpacity = 1.0
@@ -1574,11 +1586,9 @@ function swapWormholeAndStar(wormholeIndex) {
 	let starX = star.xPos
 	let starY = star.yPos
 	
-	// Swap positions
-	wh.xPos = starX
-	wh.yPos = starY
-	star.xPos = whX
-	star.yPos = whY
+	// Swap positions with animation
+	startSwapAnimation(wh, whX, whY, starX, starY)
+	startSwapAnimation(star, starX, starY, whX, whY)
 	
 	// Ensure items are instantly visible
 	wh.fadeInOpacity = 1.0
@@ -1601,11 +1611,9 @@ function swapWormholeAndSwitcher(wormholeIndex) {
 	let switcherX = switcher.xPos
 	let switcherY = switcher.yPos
 	
-	// Swap positions
-	wh.xPos = switcherX
-	wh.yPos = switcherY
-	switcher.xPos = whX
-	switcher.yPos = whY
+	// Swap positions with animation
+	startSwapAnimation(wh, whX, whY, switcherX, switcherY)
+	startSwapAnimation(switcher, switcherX, switcherY, whX, whY)
 	
 	// Ensure items are instantly visible
 	wh.fadeInOpacity = 1.0
@@ -1628,11 +1636,9 @@ function swapWormholeAndCross(wormholeIndex) {
 	let crossX = cross.xPos
 	let crossY = cross.yPos
 	
-	// Swap positions
-	wh.xPos = crossX
-	wh.yPos = crossY
-	cross.xPos = whX
-	cross.yPos = whY
+	// Swap positions with animation
+	startSwapAnimation(wh, whX, whY, crossX, crossY)
+	startSwapAnimation(cross, crossX, crossY, whX, whY)
 	
 	// Ensure items are instantly visible
 	wh.fadeInOpacity = 1.0
@@ -1655,11 +1661,9 @@ function swapWormholeAndLightning(wormholeIndex) {
 	let lightningX = lightning.xPos
 	let lightningY = lightning.yPos
 	
-	// Swap positions
-	wh.xPos = lightningX
-	wh.yPos = lightningY
-	lightning.xPos = whX
-	lightning.yPos = whY
+	// Swap positions with animation
+	startSwapAnimation(wh, whX, whY, lightningX, lightningY)
+	startSwapAnimation(lightning, lightningX, lightningY, whX, whY)
 	
 	// Ensure items are instantly visible
 	wh.fadeInOpacity = 1.0
@@ -1682,11 +1686,9 @@ function swapWormholeAndBush(wormholeIndex) {
 	let bushX = bush.xPos
 	let bushY = bush.yPos
 	
-	// Swap positions
-	wh.xPos = bushX
-	wh.yPos = bushY
-	bush.xPos = whX
-	bush.yPos = whY
+	// Swap positions with animation
+	startSwapAnimation(wh, whX, whY, bushX, bushY)
+	startSwapAnimation(bush, bushX, bushY, whX, whY)
 	
 	// Ensure items are instantly visible
 	wh.fadeInOpacity = 1.0
@@ -1711,11 +1713,9 @@ function swapWormholeAndWormhole(wormholeIndex1, wormholeIndex2) {
 	let wh2X = wh2.xPos
 	let wh2Y = wh2.yPos
 	
-	// Swap positions
-	wh1.xPos = wh2X
-	wh1.yPos = wh2Y
-	wh2.xPos = wh1X
-	wh2.yPos = wh1Y
+	// Swap positions with animation
+	startSwapAnimation(wh1, wh1X, wh1Y, wh2X, wh2Y)
+	startSwapAnimation(wh2, wh2X, wh2Y, wh1X, wh1Y)
 	
 	// Ensure wormholes are instantly visible
 	wh1.fadeInOpacity = 1.0
@@ -2152,6 +2152,22 @@ function handleTouchstart(e) {
 		}
 	}
 	
+	// Check if tapping on the trophy (big door)
+	if (trophy && !trophy.hit) {
+		let trophyDistance = Math.hypot(touch1.xPos - trophy.xPos, touch1.yPos - trophy.yPos)
+		if (trophyDistance < trophy.radius + TOUCH_TOLERANCE) {
+			if (selectedForConversion && selectedForConversion.type === 'ball') {
+				// Second tap: we have a ball selected, now tapping trophy - swap positions
+				swapBallAndTrophy()
+				return
+			} else {
+				// First tap: select this trophy
+				selectedForConversion = { type: 'trophy', index: 0 }
+				return
+			}
+		}
+	}
+	
 	// Check if tapping on the ball (check after targets/obstacles to avoid blocking them)
 	let ballDistance = Math.hypot(touch1.xPos - ball.xPos, touch1.yPos - ball.yPos)
 	if (ballDistance < ballRadius + TOUCH_TOLERANCE) {
@@ -2186,6 +2202,9 @@ function handleTouchstart(e) {
 				return
 			} else if (selectedForConversion.type === 'wormhole') {
 				swapBallAndWormhole(selectedForConversion.index)
+				return
+			} else if (selectedForConversion.type === 'trophy') {
+				swapBallAndTrophy()
 				return
 			}
 		}
@@ -4451,6 +4470,12 @@ function draw() {
 	// Draw the score first, then draw the door on top of everything (z-order)
 	drawCompletionScore()
 	drawTrophy()
+	
+	// Draw selection line between selected sprite and ball
+	drawSelectionLine()
+	
+	// Draw electric lines during swap animations
+	drawSwapAnimationLines()
 }
 
 function createFireworks(x, y, color = "blue") {
@@ -4521,8 +4546,9 @@ function drawFireworks() {
 
 function drawBall() {
 	let radius = getBallRadius()
-	let x = ball.xPos
-	let y = ball.yPos
+	let pos = getSwapAnimatedPosition(ball)
+	let x = pos.x
+	let y = pos.y
 	
 	// Apply fade opacity
 	ctx.save()
@@ -4603,8 +4629,9 @@ function drawLightning() {
 	if (!lightning) return
 	
 	let radius = lightning.radius
-	let x = lightning.xPos
-	let y = lightning.yPos
+	let animPos = getSwapAnimatedPosition(lightning)
+	let x = animPos.x
+	let y = animPos.y
 	
 	// Initialize fade-in if missing
 	if (lightning.fadeInOpacity === undefined || lightning.fadeInStartTime === undefined) {
@@ -4661,8 +4688,9 @@ function drawBush() {
 	if (!bush) return
 	
 	let radius = bush.radius
-	let x = bush.xPos
-	let y = bush.yPos
+	let animPos = getSwapAnimatedPosition(bush)
+	let x = animPos.x
+	let y = animPos.y
 	
 	// Initialize fade-in if missing
 	if (bush.fadeInOpacity === undefined || bush.fadeInStartTime === undefined) {
@@ -4719,8 +4747,9 @@ function drawWormholes() {
 		if (!wh) continue
 		
 		let radius = wh.radius
-		let x = wh.xPos
-		let y = wh.yPos
+		let animPos = getSwapAnimatedPosition(wh)
+		let x = animPos.x
+		let y = animPos.y
 		
 		// Initialize fade-in if missing
 		if (wh.fadeInOpacity === undefined || wh.fadeInStartTime === undefined) {
@@ -4816,8 +4845,9 @@ function drawTargets() {
 	for (let i=0; i<targetsRemaining.length; i++) {
 		let target = targetsRemaining[i]
 		let radius = getTargetRadius()
-		let x = target.xPos
-		let y = target.yPos
+		let pos = getSwapAnimatedPosition(target)
+		let x = pos.x
+		let y = pos.y
 		
 		// Get opacity - ONLY show if fadeInStartTime has passed
 		let now = Date.now()
@@ -4947,8 +4977,9 @@ function drawObstacles() {
 	for (let i = 0; i < obstacles.length; i++) {
 		let obstacle = obstacles[i]
 		let radius = obstacle.radius
-		let x = obstacle.xPos
-		let y = obstacle.yPos
+		let animPos = getSwapAnimatedPosition(obstacle)
+		let x = animPos.x
+		let y = animPos.y
 		
 		// Get opacity based on fade-in/fade-out state
 		let opacity = obstacle.fadeInOpacity !== undefined ? obstacle.fadeInOpacity : 0
@@ -5025,8 +5056,9 @@ function drawStar() {
 	if (!star) return
 	
 	let radius = star.radius
-	let x = star.xPos
-	let y = star.yPos
+	let animPos = getSwapAnimatedPosition(star)
+	let x = animPos.x
+	let y = animPos.y
 	
 	// Initialize fade-in if missing
 	if (star.fadeInOpacity === undefined || star.fadeInStartTime === undefined) {
@@ -5079,8 +5111,9 @@ function drawSwitcher() {
 	if (!switcher) return
 	
 	let radius = switcher.radius
-	let x = switcher.xPos
-	let y = switcher.yPos
+	let animPos = getSwapAnimatedPosition(switcher)
+	let x = animPos.x
+	let y = animPos.y
 	
 	// Initialize fade-in if missing
 	if (switcher.fadeInOpacity === undefined || switcher.fadeInStartTime === undefined) {
@@ -5181,8 +5214,9 @@ function drawCross() {
 	if (!cross) return
 	
 	let radius = cross.radius
-	let x = cross.xPos
-	let y = cross.yPos
+	let animPos = getSwapAnimatedPosition(cross)
+	let x = animPos.x
+	let y = animPos.y
 	
 	// Initialize fade-in if missing
 	if (cross.fadeInOpacity === undefined || cross.fadeInStartTime === undefined) {
@@ -5299,8 +5333,9 @@ function drawTrophy() {
 	if (!trophy) return
 	
 	let radius = trophy.radius
-	let x = trophy.xPos
-	let y = trophy.yPos
+	let animPos = getSwapAnimatedPosition(trophy)
+	let x = animPos.x
+	let y = animPos.y
 	
 	// Get opacity (fade-in, fade-out, or default to 1.0)
 	let opacity = trophy.fadeInOpacity !== undefined ? trophy.fadeInOpacity : 1.0
@@ -5367,6 +5402,287 @@ function drawTrophy() {
 	ctx.stroke()
 	
 	ctx.restore()
+}
+
+function drawSelectionLine() {
+	if (!selectedForConversion) return
+	
+	// Get the position of the selected sprite
+	let spriteX, spriteY
+	let spriteType = selectedForConversion.type
+	let spriteIndex = selectedForConversion.index
+	
+	if (spriteType === 'target') {
+		let target = targetsRemaining[spriteIndex]
+		if (!target) return
+		spriteX = target.xPos
+		spriteY = target.yPos
+	} else if (spriteType === 'obstacle') {
+		let obstacle = obstacles[spriteIndex]
+		if (!obstacle) return
+		spriteX = obstacle.xPos
+		spriteY = obstacle.yPos
+	} else if (spriteType === 'star') {
+		if (!star) return
+		spriteX = star.xPos
+		spriteY = star.yPos
+	} else if (spriteType === 'switcher') {
+		if (!switcher) return
+		spriteX = switcher.xPos
+		spriteY = switcher.yPos
+	} else if (spriteType === 'cross') {
+		if (!cross) return
+		spriteX = cross.xPos
+		spriteY = cross.yPos
+	} else if (spriteType === 'lightning') {
+		if (!lightning) return
+		spriteX = lightning.xPos
+		spriteY = lightning.yPos
+	} else if (spriteType === 'bush') {
+		if (!bush) return
+		spriteX = bush.xPos
+		spriteY = bush.yPos
+	} else if (spriteType === 'wormhole') {
+		if (!wormhole || !wormhole[spriteIndex]) return
+		spriteX = wormhole[spriteIndex].xPos
+		spriteY = wormhole[spriteIndex].yPos
+	} else if (spriteType === 'trophy') {
+		if (!trophy) return
+		spriteX = trophy.xPos
+		spriteY = trophy.yPos
+	} else if (spriteType === 'ball') {
+		// Ball is selected, no line to draw (ball to itself)
+		return
+	} else {
+		return
+	}
+	
+	let ballX = ball.xPos
+	let ballY = ball.yPos
+	
+	ctx.save()
+	
+	// Calculate distance and direction
+	let dx = ballX - spriteX
+	let dy = ballY - spriteY
+	let distance = Math.hypot(dx, dy)
+	
+	if (distance < 1) {
+		ctx.restore()
+		return
+	}
+	
+	// Normalize direction
+	let nx = dx / distance
+	let ny = dy / distance
+	// Perpendicular direction for offsets
+	let px = -ny
+	let py = nx
+	
+	// Time-based animation for electricity flicker
+	let time = Date.now() * 0.01
+	
+	// Draw glow effect (outer layer)
+	ctx.strokeStyle = "rgba(0, 255, 100, 0.3)"
+	ctx.lineWidth = 8
+	ctx.lineCap = "round"
+	ctx.lineJoin = "round"
+	ctx.beginPath()
+	ctx.moveTo(spriteX, spriteY)
+	ctx.lineTo(ballX, ballY)
+	ctx.stroke()
+	
+	// Draw main electricity line with jagged segments
+	let segments = Math.max(5, Math.floor(distance / 30))
+	
+	// Draw multiple electricity arcs for effect
+	for (let arc = 0; arc < 3; arc++) {
+		ctx.strokeStyle = arc === 0 ? "#00ff66" : "rgba(150, 255, 200, 0.6)"
+		ctx.lineWidth = arc === 0 ? 2 : 1
+		
+		ctx.beginPath()
+		ctx.moveTo(spriteX, spriteY)
+		
+		for (let i = 1; i < segments; i++) {
+			let t = i / segments
+			// Base position along the line
+			let baseX = spriteX + dx * t
+			let baseY = spriteY + dy * t
+			
+			// Add random offset perpendicular to the line (electricity jitter)
+			// Use time and position to create animated noise
+			let noise1 = Math.sin(time + i * 3.7 + arc * 2.1) * 0.5 + Math.sin(time * 1.3 + i * 2.3) * 0.5
+			let noise2 = Math.cos(time * 0.8 + i * 4.1 + arc * 1.7) * 0.5 + Math.cos(time * 1.7 + i * 1.9) * 0.5
+			let offset = (noise1 + noise2) * 12 * (1 - Math.abs(t - 0.5) * 2) // Stronger in middle
+			
+			let jitterX = baseX + px * offset
+			let jitterY = baseY + py * offset
+			
+			ctx.lineTo(jitterX, jitterY)
+		}
+		
+		ctx.lineTo(ballX, ballY)
+		ctx.stroke()
+	}
+	
+	// Draw bright core
+	ctx.strokeStyle = "#aaffcc"
+	ctx.lineWidth = 1
+	ctx.beginPath()
+	ctx.moveTo(spriteX, spriteY)
+	ctx.lineTo(ballX, ballY)
+	ctx.stroke()
+	
+	// Add small spark effects at both ends
+	let sparkCount = 3
+	for (let i = 0; i < sparkCount; i++) {
+		let sparkAngle = time * 2 + i * (Math.PI * 2 / sparkCount)
+		let sparkLen = 8 + Math.sin(time * 3 + i) * 4
+		
+		ctx.strokeStyle = "rgba(150, 255, 200, 0.8)"
+		ctx.lineWidth = 1
+		
+		// Spark at sprite end
+		ctx.beginPath()
+		ctx.moveTo(spriteX, spriteY)
+		ctx.lineTo(
+			spriteX + Math.cos(sparkAngle) * sparkLen,
+			spriteY + Math.sin(sparkAngle) * sparkLen
+		)
+		ctx.stroke()
+		
+		// Spark at ball end
+		ctx.beginPath()
+		ctx.moveTo(ballX, ballY)
+		ctx.lineTo(
+			ballX + Math.cos(sparkAngle + Math.PI) * sparkLen,
+			ballY + Math.sin(sparkAngle + Math.PI) * sparkLen
+		)
+		ctx.stroke()
+	}
+	
+	ctx.restore()
+}
+
+// Draw electric lines during swap animations
+function drawSwapAnimationLines() {
+	if (swapAnimations.length === 0) return
+	
+	// Get ball's animated position
+	let ballAnimPos = getSwapAnimatedPosition(ball)
+	let ballX = ballAnimPos.x
+	let ballY = ballAnimPos.y
+	
+	// Draw lines from each animating sprite (except ball) to the ball
+	for (let anim of swapAnimations) {
+		if (anim.sprite === ball) continue
+		
+		let animPos = getSwapAnimatedPosition(anim.sprite)
+		let spriteX = animPos.x
+		let spriteY = animPos.y
+		
+		ctx.save()
+		
+		// Calculate distance and direction
+		let dx = ballX - spriteX
+		let dy = ballY - spriteY
+		let distance = Math.hypot(dx, dy)
+		
+		if (distance < 1) {
+			ctx.restore()
+			continue
+		}
+		
+		// Normalize direction
+		let nx = dx / distance
+		let ny = dy / distance
+		// Perpendicular direction for offsets
+		let px = -ny
+		let py = nx
+		
+		// Time-based animation for electricity flicker
+		let time = Date.now() * 0.01
+		
+		// Draw glow effect (outer layer)
+		ctx.strokeStyle = "rgba(0, 255, 100, 0.3)"
+		ctx.lineWidth = 8
+		ctx.lineCap = "round"
+		ctx.lineJoin = "round"
+		ctx.beginPath()
+		ctx.moveTo(spriteX, spriteY)
+		ctx.lineTo(ballX, ballY)
+		ctx.stroke()
+		
+		// Draw main electricity line with jagged segments
+		let segments = Math.max(5, Math.floor(distance / 30))
+		
+		// Draw multiple electricity arcs for effect
+		for (let arc = 0; arc < 3; arc++) {
+			ctx.strokeStyle = arc === 0 ? "#00ff66" : "rgba(150, 255, 200, 0.6)"
+			ctx.lineWidth = arc === 0 ? 2 : 1
+			
+			ctx.beginPath()
+			ctx.moveTo(spriteX, spriteY)
+			
+			for (let i = 1; i < segments; i++) {
+				let t = i / segments
+				// Base position along the line
+				let baseX = spriteX + dx * t
+				let baseY = spriteY + dy * t
+				
+				// Add random offset perpendicular to the line (electricity jitter)
+				let noise1 = Math.sin(time + i * 3.7 + arc * 2.1) * 0.5 + Math.sin(time * 1.3 + i * 2.3) * 0.5
+				let noise2 = Math.cos(time * 0.8 + i * 4.1 + arc * 1.7) * 0.5 + Math.cos(time * 1.7 + i * 1.9) * 0.5
+				let offset = (noise1 + noise2) * 12 * (1 - Math.abs(t - 0.5) * 2)
+				
+				let jitterX = baseX + px * offset
+				let jitterY = baseY + py * offset
+				
+				ctx.lineTo(jitterX, jitterY)
+			}
+			
+			ctx.lineTo(ballX, ballY)
+			ctx.stroke()
+		}
+		
+		// Draw bright core
+		ctx.strokeStyle = "#aaffcc"
+		ctx.lineWidth = 1
+		ctx.beginPath()
+		ctx.moveTo(spriteX, spriteY)
+		ctx.lineTo(ballX, ballY)
+		ctx.stroke()
+		
+		// Add small spark effects at both ends
+		let sparkCount = 3
+		for (let i = 0; i < sparkCount; i++) {
+			let sparkAngle = time * 2 + i * (Math.PI * 2 / sparkCount)
+			let sparkLen = 8 + Math.sin(time * 3 + i) * 4
+			
+			ctx.strokeStyle = "rgba(150, 255, 200, 0.8)"
+			ctx.lineWidth = 1
+			
+			// Spark at sprite end
+			ctx.beginPath()
+			ctx.moveTo(spriteX, spriteY)
+			ctx.lineTo(
+				spriteX + Math.cos(sparkAngle) * sparkLen,
+				spriteY + Math.sin(sparkAngle) * sparkLen
+			)
+			ctx.stroke()
+			
+			// Spark at ball end
+			ctx.beginPath()
+			ctx.moveTo(ballX, ballY)
+			ctx.lineTo(
+				ballX + Math.cos(sparkAngle + Math.PI) * sparkLen,
+				ballY + Math.sin(sparkAngle + Math.PI) * sparkLen
+			)
+			ctx.stroke()
+		}
+		
+		ctx.restore()
+	}
 }
 
 function getScoreCenter() {
