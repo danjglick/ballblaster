@@ -74,6 +74,8 @@ let touch1 = {
 	xPos: 0,
 	yPos: 0
 }
+let ballTappedForSelection = false // Track if ball was tapped (for potential selection after touchend)
+let touchMoved = false // Track if user moved their finger (indicates a fling, not a tap)
 // Track where the last target was collected so we can place the trophy there
 let lastTargetX = null
 let lastTargetY = null
@@ -1655,6 +1657,8 @@ function handleTouchstart(e) {
 		yPos: e.touches[0].clientY - canvasRect.top
 	}
 	isConvertingObstacle = false
+	ballTappedForSelection = false // Reset flag
+	touchMoved = false // Reset flag
 	
 	// TESTING: Clicking the score instantly advances to next level and increments score
 	ctx.save()
@@ -2021,12 +2025,6 @@ function handleTouchstart(e) {
 			} else {
 				// First tap: select this obstacle
 				selectedForConversion = { type: 'obstacle', index: i }
-				
-				// Advance tutorial to switching mechanic once player taps an obstacle.
-				if (level === 1 && tutorialStep === 2 && !tutorialCompleted) {
-					tutorialStep = 3
-					updateTutorial()
-				}
 				return
 			}
 		}
@@ -2072,12 +2070,6 @@ function handleTouchstart(e) {
 			} else {
 				// First tap: select this target
 				selectedForConversion = { type: 'target', index: i }
-				
-				// Advance tutorial to switching mechanic once player taps a target.
-				if (level === 1 && tutorialStep === 2 && !tutorialCompleted) {
-					tutorialStep = 3
-					updateTutorial()
-				}
 				return
 			}
 		}
@@ -2121,8 +2113,9 @@ function handleTouchstart(e) {
 			}
 		}
 		
-		// If nothing selected, select the ball (but allow flinging on drag)
-		selectedForConversion = { type: 'ball', index: 0 }
+		// If nothing selected, prepare for flinging (don't select for swapping yet)
+		// Selection will happen in touchend only if user didn't drag (it was a tap)
+		ballTappedForSelection = true
 		ball.isBeingFlung = true
 		// Reset the flag when user starts flinging again
 		ballStoppedByBushEffect = false
@@ -2139,6 +2132,16 @@ function handleTouchmove(e) {
 	let touch2 = { 
 		xPos: e.touches[0].clientX, 
 		yPos: e.touches[0].clientY 
+	}
+	// If user moved their finger, it's a fling, not a tap
+	if (ballTappedForSelection) {
+		let canvasRect = canvas.getBoundingClientRect()
+		let currentX = e.touches[0].clientX - canvasRect.left
+		let currentY = e.touches[0].clientY - canvasRect.top
+		let moveDistance = Math.hypot(currentX - touch1.xPos, currentY - touch1.yPos)
+		if (moveDistance > 5) { // Small threshold to distinguish tap from drag
+			touchMoved = true
+		}
 	}
 	if (ball.isBeingFlung) {
 		// Only start a shot when user actually drags (not just taps)
@@ -2167,8 +2170,14 @@ function handleTouchmove(e) {
 }
 
 function handleTouchend() {
+	// If ball was tapped and user didn't move, select it for swapping
+	if (ballTappedForSelection && !touchMoved) {
+		selectedForConversion = { type: 'ball', index: 0 }
+	}
 	ball.isBeingFlung = false
 	isConvertingObstacle = false
+	ballTappedForSelection = false // Reset flag
+	touchMoved = false // Reset flag
 }
 
 function getScoreBounds() {
@@ -3644,20 +3653,8 @@ function handleCollisionWithTarget() {
 			// Create fireworks every time a target is collected
 			createFireworks(targetX, targetY)
 			
-			// If bush effect is active, stop the ball (user can fling again)
-			if (bushEffectActive) {
-				ballStoppedByBushEffect = true
-				ball.xVel = 0
-				ball.yVel = 0
-				ball.isBeingFlung = false
-				// Position ball perfectly overlapping with target center
-				ball.xPos = targetX
-				ball.yPos = targetY
-				// Don't auto-reset - let user fling again
-				return
-			}
-			
 			// Fade away obstacles when last target is collected
+			// Check this BEFORE the bush effect early return so level completion still works
 			if (wasLastTarget) {
 				// This shot successfully cleared all targets
 				shotActive = false
@@ -3702,6 +3699,20 @@ function handleCollisionWithTarget() {
 					placeTrophy()
 					// Tutorial step 2 and level 2 tutorial both stay until next level appears
 				}, TROPHY_PLACEMENT_DELAY)
+			}
+			
+			// If bush effect is active, stop the ball (user can fling again)
+			// But only if it wasn't the last target (level completion already handled above)
+			if (bushEffectActive && !wasLastTarget) {
+				ballStoppedByBushEffect = true
+				ball.xVel = 0
+				ball.yVel = 0
+				ball.isBeingFlung = false
+				// Position ball perfectly overlapping with target center
+				ball.xPos = targetX
+				ball.yPos = targetY
+				// Don't auto-reset - let user fling again
+				return
 			}
 		}
 	}
@@ -5272,7 +5283,7 @@ function updateTutorial() {
 		if (tutorialStep === 3) {
 			text = "Swap any two items by tapping them"
 		} else if (tutorialStep === 4) {
-			text = "Think carefully, aim true, and seize glory!"
+			text = "Think carefully, aim true, and achieve victory!"
 		}
 	}
 
