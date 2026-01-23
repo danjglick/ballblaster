@@ -3607,6 +3607,27 @@ function moveBall() {
 
 			shotActive = false
 
+			// On level 1, hide the current tutorial step when auto-reset starts
+			// tries is already incremented when ball is flung, so:
+			// tries == 1 means we're starting auto-reset for try 1, hide step 1
+			// tries == 2 means we're starting auto-reset for try 2, hide step 2
+			// tries == 3 means we're starting auto-reset for try 3, hide step 3
+			if (level === 1) {
+				if (tries === 1) {
+					// Hiding step 1 when auto-reset starts for try 1
+					level1TutorialPopupVisible = false
+					level1TutorialPopupStartTime = null
+				} else if (tries === 2) {
+					// Hiding step 2 when auto-reset starts for try 2
+					level1Step2TutorialVisible = false
+					level1Step2TutorialStartTime = null
+				} else if (tries === 3) {
+					// Hiding step 3 when auto-reset starts for try 3
+					level1Step3TutorialVisible = false
+					level1Step3TutorialStartTime = null
+				}
+			}
+
 			// Set up ball auto-reset animation
 			autoResetActive = true
 			autoResetStartTime = Date.now()
@@ -3802,15 +3823,6 @@ function handleCollisionWithTarget() {
 			// Increment completion score when a target is collected
 			completionScore++
 			
-			// On level 1, hide tutorial text when first target is hit
-			if (level === 1) {
-				level1TutorialPopupVisible = false
-				level1TutorialPopupStartTime = null
-				level1Step2TutorialVisible = false
-				level1Step2TutorialStartTime = null
-				level1Step3TutorialVisible = false
-				level1Step3TutorialStartTime = null
-			}
 			
 			// Fade away obstacles when last target is collected
 			// Check this BEFORE the bush effect early return so level completion still works
@@ -3865,6 +3877,28 @@ function handleCollisionWithObstacle() {
 			// If too many collisions in the time window, trigger auto-reset
 			if (shotActive && obstacleCollisionTimes.length >= MAX_OBSTACLE_COLLISIONS && !autoResetActive && !pendingNextLevel && !isGeneratingLevel) {
 				shotActive = false
+				
+				// On level 1, hide the current tutorial step when auto-reset starts
+				// tries is already incremented when ball is flung, so:
+				// tries == 1 means we're starting auto-reset for try 1, hide step 1
+				// tries == 2 means we're starting auto-reset for try 2, hide step 2
+				// tries == 3 means we're starting auto-reset for try 3, hide step 3
+				if (level === 1) {
+					if (tries === 1) {
+						// Hiding step 1 when auto-reset starts for try 1
+						level1TutorialPopupVisible = false
+						level1TutorialPopupStartTime = null
+					} else if (tries === 2) {
+						// Hiding step 2 when auto-reset starts for try 2
+						level1Step2TutorialVisible = false
+						level1Step2TutorialStartTime = null
+					} else if (tries === 3) {
+						// Hiding step 3 when auto-reset starts for try 3
+						level1Step3TutorialVisible = false
+						level1Step3TutorialStartTime = null
+					}
+				}
+				
 				// Set up ball auto-reset animation
 				autoResetActive = true
 				autoResetStartTime = Date.now()
@@ -4562,7 +4596,8 @@ function draw() {
 	}
 	
 	// Draw level 1 step 2 instruction text (fixed position above initial ball position)
-	if (level === 1 && tries === 1 && level1Step2TutorialVisible && level1InitialBallY !== null) {
+	// Step 2 should be visible when tries >= 1 (after auto-reset for try 1) until auto-reset starts for try 2
+	if (level === 1 && tries >= 1 && level1Step2TutorialVisible && level1InitialBallY !== null) {
 		let radius = getBallRadius()
 		ctx.save()
 		ctx.fillStyle = "#ffffff"
@@ -4579,7 +4614,8 @@ function draw() {
 	}
 	
 	// Draw level 1 step 3 instruction text (fixed position above initial ball position)
-	if (level === 1 && tries === 2 && level1Step3TutorialVisible && level1InitialBallY !== null) {
+	// Step 3 should be visible when tries >= 2 (after auto-reset for try 2) until auto-reset starts for try 3
+	if (level === 1 && tries >= 2 && level1Step3TutorialVisible && level1InitialBallY !== null) {
 		let radius = getBallRadius()
 		ctx.save()
 		ctx.fillStyle = "#ffffff"
