@@ -4553,16 +4553,16 @@ function draw() {
 				}
 				// Show step 2 when ready for 2nd fling (after level completion)
 				if (totalFlingsThisSession === 1 && !level1Step2TutorialVisible && level1Step2TutorialStartTime === null) {
-					level1Step2TutorialStartTime = Date.now() + 1000
+					level1Step2TutorialStartTime = Date.now() // Show immediately when ball finishes fade-in
 				}
 				// Show step 3 when ready for 3rd fling (after level completion, only once per session)
 				if (totalFlingsThisSession === 2 && !level1Step3TutorialShownThisSession && level1Step3TutorialStartTime === null) {
-					level1Step3TutorialStartTime = Date.now() + 1000
+					level1Step3TutorialStartTime = Date.now() // Show immediately when ball finishes fade-in
 					level1Step3TutorialShownThisSession = true
 				}
 				// Show step 4 when ready for 4th fling (after level completion)
 				if (totalFlingsThisSession === 3 && !level2MessageVisible && level2MessageStartTime === null) {
-					level2MessageStartTime = Date.now() + 1000
+					level2MessageStartTime = Date.now() // Show immediately when ball finishes fade-in
 				}
 			}
 		} else if (!wormholeTeleportPending && !ballHiddenForNextLevel) {
