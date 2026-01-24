@@ -2700,14 +2700,14 @@ function placeTrophy() {
 }
 
 function placeTargets() {
-	// All levels: 5 targets
-	let targetCount = 5
+	// All levels: 4 targets
+	let targetCount = 4
 	placeTargetsWithCount(targetCount)
 }
 
 function placeObstacles() {
-	// All levels: 5 obstacles
-	let obstacleCount = 5
+	// All levels: 12 obstacles
+	let obstacleCount = 12
 	placeObstaclesWithCount(obstacleCount)
 }
 
@@ -4591,7 +4591,7 @@ function draw() {
 		let lineHeight = fontSize * 1.2 // Line spacing
 		let baseY = level1InitialBallY - radius - 50
 		ctx.fillText("1. Fling the smiley face", canvas.width / 2, baseY)
-		ctx.fillText("at the carrots", canvas.width / 2, baseY + lineHeight)
+		ctx.fillText("at a carrot", canvas.width / 2, baseY + lineHeight)
 		ctx.restore()
 	}
 	
