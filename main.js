@@ -133,6 +133,7 @@ let level1Step2TutorialStartTime = null // Track when level 1 step 2 tutorial sh
 let level1Step2TutorialVisible = false // Track if level 1 step 2 tutorial is visible
 let level1Step3TutorialStartTime = null // Track when level 1 step 3 tutorial should appear
 let level1Step3TutorialVisible = false // Track if level 1 step 3 tutorial is visible
+let level1Step3TutorialShownThisSession = false // Track if step 3 has been shown this game session (only show once)
 let level2MessageStartTime = null // Track when level 2 message should appear
 let level2MessageVisible = false // Track if level 2 message is visible
 let level2InitialBallY = null // Store initial ball Y position for level 2 message
@@ -3522,25 +3523,35 @@ function moveBall() {
 		return
 	}
 
-	// If we're in the middle of an auto-reset (failed shot), instantly move ball back
+	// If we're in the middle of an auto-reset (failed shot), animate the ball
+	// moving back to its starting spot for this level.
 	if (autoResetActive) {
-		// Instantly move ball to original position
-		ball.xPos = autoResetBallToX
-		ball.yPos = autoResetBallToY
+		let elapsed = Date.now() - autoResetStartTime
+		let t = Math.min(1, Math.max(0, elapsed / AUTO_RESET_DURATION))
+		// Simple ease-out interpolation for a smoother feel
+		let easeT = 1 - Math.pow(1 - t, 2)
+		ball.xPos = autoResetBallFromX + (autoResetBallToX - autoResetBallFromX) * easeT
+		ball.yPos = autoResetBallFromY + (autoResetBallToY - autoResetBallFromY) * easeT
 		ball.xVel = 0
 		ball.yVel = 0
-		autoResetActive = false
-		
-		// On level 1, show step 2 tutorial immediately when auto-reset completes (when tries == 1)
-		if (level === 1 && tries === 1) {
-			level1Step2TutorialVisible = true
-			level1Step2TutorialStartTime = Date.now() // Set to now so it appears immediately
-		}
-		
-		// On level 1, show step 3 tutorial immediately when auto-reset completes (when tries == 2)
-		if (level === 1 && tries === 2) {
-			level1Step3TutorialVisible = true
-			level1Step3TutorialStartTime = Date.now() // Set to now so it appears immediately
+		if (t >= 1) {
+			ball.xPos = autoResetBallToX
+			ball.yPos = autoResetBallToY
+			autoResetActive = false
+			
+			// On level 1, show step 2 tutorial immediately when auto-reset completes (when tries == 1)
+			if (level === 1 && tries === 1) {
+				level1Step2TutorialVisible = true
+				level1Step2TutorialStartTime = Date.now() // Set to now so it appears immediately
+			}
+			
+			// On level 1, show step 3 tutorial immediately when auto-reset completes (when tries == 2)
+			// Only show once per game session
+			if (level === 1 && tries === 2 && !level1Step3TutorialShownThisSession) {
+				level1Step3TutorialVisible = true
+				level1Step3TutorialStartTime = Date.now() // Set to now so it appears immediately
+				level1Step3TutorialShownThisSession = true // Mark as shown this session
+			}
 		}
 		return
 	}
@@ -6127,7 +6138,7 @@ function getScoreCenter() {
 
 function drawCompletionScore() {
 	ctx.font = "bold 56px Arial"
-	let scoreText = `${completionScore}`
+	let scoreText = `${level}`
 	
 	// Draw text outline for better visibility
 	ctx.strokeStyle = "black"
