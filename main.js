@@ -40,13 +40,13 @@ let wormholeDisabledUntil = 0 // Timestamp when wormholes become available again
 let targets = []
 let targetsRemaining = []
 let obstacles = []
-let star = null // White star that removes obstacles when hit (spawns starting level 6, cycles through items)
-let switcher = null // White loop symbol that switches all red and blue balls when hit (spawns starting level 6, cycles through items)
-let cross = null // White cross/X mark that doubles obstacles when hit (spawns starting level 6, cycles through items)
-let lightning = null // Orange lightning bolt that gives pass-through (spawns starting level 6, cycles through items)
+let star = null // White star that removes obstacles when hit (spawns starting level 3, cycles through items)
+let switcher = null // White loop symbol that switches all red and blue balls when hit (spawns starting level 3, cycles through items)
+let cross = null // White cross/X mark that doubles obstacles when hit (spawns starting level 3, cycles through items)
+let lightning = null // Orange lightning bolt that gives pass-through (spawns starting level 3, cycles through items)
 let lightningImage = null // Image for lightning bolt
-let bush = null // Green bush that slows ball and gives green border (spawns starting level 6, cycles through items)
-let wormhole = null // Array of two purple wormholes that teleport ball between them (spawns starting level 6, cycles through items)
+let bush = null // Green bush that slows ball and gives green border (spawns starting level 3, cycles through items)
+let wormhole = null // Array of two purple wormholes that teleport ball between them (spawns starting level 3, cycles through items)
 let starHitThisTry = false // Track whether ball was colliding with star on the previous frame (for hit detection)
 let crossHitThisTry = false // Track whether ball was colliding with cross on the previous frame (for hit detection)
 let starLastHitTime = 0 // Timestamp of last star activation (cooldown)
@@ -228,7 +228,7 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 			level++
 		}
 		if (fewerSprites) {
-			placeTargetsWithCount(5)
+			placeTargetsWithCount(4)
 			placeObstaclesWithCount(5)
 		} else {
 			placeTargets()
@@ -266,10 +266,10 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 		wormholeLastTeleportTime = 0
 		wormholeTeleportPending = null
 		wormholeDisabledUntil = 0
-		// Spawn special items per level starting at level 6
+		// Spawn special items per level starting at level 3
 		// First cycle: one item per level, randomly cycling through all items
 		// After all items shown once: two items per level
-		if (level >= 6) {
+		if (level >= 3) {
 			// For new levels, reset the current level's special item types
 			if (!fewerSprites) {
 				currentLevelSpecialItem = null
@@ -447,9 +447,9 @@ function generateLevel(isRetry = false, fewerSprites = false) {
 			lightningEffectActive = false
 			bushEffectActive = false
 			ballStoppedByBushEffect = false
-			// Spawn special items per level starting at level 6
+			// Spawn special items per level starting at level 3
 			// For retries, use the same item types that were selected for this level
-			if (level >= 6) {
+			if (level >= 3) {
 				// Use the current level's special items (determined on first attempt)
 				if (currentLevelSpecialItems.length > 0) {
 					for (let item of currentLevelSpecialItems) {
@@ -2761,14 +2761,14 @@ function placeTrophy() {
 }
 
 function placeTargets() {
-	// All levels: 5 targets
-	let targetCount = 5
+	// All levels: 4 targets
+	let targetCount = 3
 	placeTargetsWithCount(targetCount)
 }
 
 function placeObstacles() {
 	// All levels: 5 obstacles
-	let obstacleCount = 5
+	let obstacleCount = 9
 	placeObstaclesWithCount(obstacleCount)
 }
 
@@ -4669,7 +4669,10 @@ function draw() {
 		let lineHeight = fontSize * 1.2 // Line spacing
 		let baseY = level1InitialBallY - radius - 50
 		ctx.fillText("fling the smiley face", canvas.width / 2, baseY)
-		ctx.fillText("at a carrot", canvas.width / 2, baseY + lineHeight)
+		// Show second line 1 second after first line appears
+		if (level1TutorialPopupStartTime && Date.now() >= level1TutorialPopupStartTime + 1000) {
+			ctx.fillText("at a carrot", canvas.width / 2, baseY + lineHeight)
+		}
 		ctx.restore()
 	}
 	
@@ -4686,8 +4689,11 @@ function draw() {
 		// Fixed position: centered horizontally, positioned above initial ball position
 		let lineHeight = fontSize * 1.2 // Line spacing
 		let baseY = level1InitialBallY - radius - 50
-		ctx.fillText("get all the carrots in one shot", canvas.width / 2, baseY)
-		ctx.fillText("to move on to the next garden", canvas.width / 2, baseY + lineHeight)
+		ctx.fillText("get all the carrots", canvas.width / 2, baseY)
+		// Show second line 1 second after first line appears
+		if (level1Step2TutorialStartTime && Date.now() >= level1Step2TutorialStartTime + 1000) {
+			ctx.fillText("in one shot", canvas.width / 2, baseY + lineHeight)
+		}
 		ctx.restore()
 	}
 	
@@ -4705,7 +4711,10 @@ function draw() {
 		let lineHeight = fontSize * 1.2 // Line spacing
 		let baseY = level1InitialBallY - radius - 50
 		ctx.fillText("swap any two items", canvas.width / 2, baseY)
-		ctx.fillText("by tapping them", canvas.width / 2, baseY + lineHeight)
+		// Show second line 1 second after first line appears
+		if (level1Step3TutorialStartTime && Date.now() >= level1Step3TutorialStartTime + 1000) {
+			ctx.fillText("by tapping them", canvas.width / 2, baseY + lineHeight)
+		}
 		ctx.restore()
 	}
 	
@@ -4719,8 +4728,13 @@ function draw() {
 		ctx.textAlign = "center"
 		ctx.textBaseline = "bottom"
 		// Fixed position: centered horizontally, positioned above initial ball position
+		let lineHeight = fontSize * 1.2 // Line spacing
 		let baseY = level2InitialBallY - radius - 50
-		ctx.fillText("think carefully and aim true!", canvas.width / 2, baseY)
+		ctx.fillText("think carefully and aim true", canvas.width / 2, baseY)
+		// Show second line 1 second after first line appears
+		if (level2MessageStartTime && Date.now() >= level2MessageStartTime + 1000) {
+			ctx.fillText("to survive", canvas.width / 2, baseY + lineHeight)
+		}
 		ctx.restore()
 	}
 	
