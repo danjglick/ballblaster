@@ -7,7 +7,7 @@ function getShim() { return (canvas?.width || window.innerWidth) / 10 }
 function getBallRadius() { return (canvas?.width || window.innerWidth) / 20 }
 function getTargetRadius() { return (canvas?.width || window.innerWidth) / 20 }
 const SPECIAL_ITEM_COOLDOWN = 1000 // ms between activations for all special items
-const FRICTION = .97
+const FRICTION = .99
 const FLING_DIVISOR = 2
 const BALL_STOP_SPEED = 10 // Higher threshold so we treat the ball as "stopped" sooner
 const TOUCH_TOLERANCE = 20 // Extra pixels for touch detection
@@ -680,6 +680,55 @@ function startSwapAnimation(sprite, fromX, fromY, toX, toY) {
 	// Set final position immediately (for collision detection)
 	sprite.xPos = toX
 	sprite.yPos = toY
+	
+	// Update saved positions so auto-reset preserves swapped positions
+	updateSavedPositionsAfterSwap()
+}
+
+// Update all saved positions to match current positions after a swap
+function updateSavedPositionsAfterSwap() {
+	// Update savedTargets to match current targetsRemaining positions
+	// (targetsRemaining is the one that gets updated during swaps)
+	if (targetsRemaining && targetsRemaining.length > 0) {
+		savedTargets = JSON.parse(JSON.stringify(targetsRemaining))
+		// Also sync targets array to match targetsRemaining
+		targets = JSON.parse(JSON.stringify(targetsRemaining))
+	}
+	
+	// Update savedObstacles to match current obstacles positions
+	if (obstacles && obstacles.length > 0) {
+		let obstaclesToSave = obstacles.map(o => ({
+			xPos: o.xPos,
+			yPos: o.yPos,
+			radius: o.radius,
+			fadeInOpacity: o.fadeInOpacity,
+			fadeInStartTime: o.fadeInStartTime
+		}))
+		savedObstacles = obstaclesToSave
+	}
+	
+	// Update savedBall to match current ball position
+	if (ball) {
+		savedBall = JSON.parse(JSON.stringify(ball))
+	}
+	
+	// Update savedStar to match current star position
+	savedStar = star ? JSON.parse(JSON.stringify(star)) : null
+	
+	// Update savedSwitcher to match current switcher position
+	savedSwitcher = switcher ? JSON.parse(JSON.stringify(switcher)) : null
+	
+	// Update savedCross to match current cross position
+	savedCross = cross ? JSON.parse(JSON.stringify(cross)) : null
+	
+	// Update savedLightning to match current lightning position
+	savedLightning = lightning ? JSON.parse(JSON.stringify(lightning)) : null
+	
+	// Update savedBush to match current bush position
+	savedBush = bush ? JSON.parse(JSON.stringify(bush)) : null
+	
+	// Update savedWormhole to match current wormhole positions
+	savedWormhole = wormhole ? JSON.parse(JSON.stringify(wormhole)) : null
 }
 
 // Update and clean up completed swap animations
@@ -3473,33 +3522,25 @@ function moveBall() {
 		return
 	}
 
-	// If we're in the middle of an auto-reset (failed shot), animate the ball
-	// moving back to its starting spot for this level.
+	// If we're in the middle of an auto-reset (failed shot), instantly move ball back
 	if (autoResetActive) {
-		let elapsed = Date.now() - autoResetStartTime
-		let t = Math.min(1, Math.max(0, elapsed / AUTO_RESET_DURATION))
-		// Simple ease-out interpolation for a smoother feel
-		let easeT = 1 - Math.pow(1 - t, 2)
-		ball.xPos = autoResetBallFromX + (autoResetBallToX - autoResetBallFromX) * easeT
-		ball.yPos = autoResetBallFromY + (autoResetBallToY - autoResetBallFromY) * easeT
+		// Instantly move ball to original position
+		ball.xPos = autoResetBallToX
+		ball.yPos = autoResetBallToY
 		ball.xVel = 0
 		ball.yVel = 0
-		if (t >= 1) {
-			ball.xPos = autoResetBallToX
-			ball.yPos = autoResetBallToY
-			autoResetActive = false
-			
-			// On level 1, show step 2 tutorial immediately when auto-reset completes (when tries == 1)
-			if (level === 1 && tries === 1) {
-				level1Step2TutorialVisible = true
-				level1Step2TutorialStartTime = Date.now() // Set to now so it appears immediately
-			}
-			
-			// On level 1, show step 3 tutorial immediately when auto-reset completes (when tries == 2)
-			if (level === 1 && tries === 2) {
-				level1Step3TutorialVisible = true
-				level1Step3TutorialStartTime = Date.now() // Set to now so it appears immediately
-			}
+		autoResetActive = false
+		
+		// On level 1, show step 2 tutorial immediately when auto-reset completes (when tries == 1)
+		if (level === 1 && tries === 1) {
+			level1Step2TutorialVisible = true
+			level1Step2TutorialStartTime = Date.now() // Set to now so it appears immediately
+		}
+		
+		// On level 1, show step 3 tutorial immediately when auto-reset completes (when tries == 2)
+		if (level === 1 && tries === 2) {
+			level1Step3TutorialVisible = true
+			level1Step3TutorialStartTime = Date.now() // Set to now so it appears immediately
 		}
 		return
 	}
@@ -4652,7 +4693,7 @@ function draw() {
 		// Fixed position: centered horizontally, positioned above initial ball position
 		let lineHeight = fontSize * 1.2 // Line spacing
 		let baseY = level1InitialBallY - radius - 50
-		ctx.fillText("swap any two objects", canvas.width / 2, baseY)
+		ctx.fillText("swap any two items", canvas.width / 2, baseY)
 		ctx.fillText("by tapping them", canvas.width / 2, baseY + lineHeight)
 		ctx.restore()
 	}
@@ -4668,7 +4709,7 @@ function draw() {
 		ctx.textBaseline = "bottom"
 		// Fixed position: centered horizontally, positioned above initial ball position
 		let baseY = level2InitialBallY - radius - 50
-		ctx.fillText("think carefully and aim true", canvas.width / 2, baseY)
+		ctx.fillText("think carefully and aim true!", canvas.width / 2, baseY)
 		ctx.restore()
 	}
 	
