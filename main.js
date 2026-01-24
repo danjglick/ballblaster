@@ -4730,10 +4730,10 @@ function draw() {
 		// Fixed position: centered horizontally, positioned above initial ball position
 		let lineHeight = fontSize * 1.2 // Line spacing
 		let baseY = level2InitialBallY - radius - 50
-		ctx.fillText("think carefully and aim true", canvas.width / 2, baseY)
+		ctx.fillText("think hard", canvas.width / 2, baseY)
 		// Show second line 1 second after first line appears
 		if (level2MessageStartTime && Date.now() >= level2MessageStartTime + 1000) {
-			ctx.fillText("to survive", canvas.width / 2, baseY + lineHeight)
+			ctx.fillText("and aim true!", canvas.width / 2, baseY + lineHeight)
 		}
 		ctx.restore()
 	}
